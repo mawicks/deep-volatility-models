@@ -11,7 +11,7 @@ from uritemplate import partial
 
 # Local imports
 import data_sources
-import history_data
+import history
 
 
 SAMPLE_DF = pd.DataFrame(
@@ -41,7 +41,7 @@ def cache_tmp_path(tmp_path):
     """
     Create an instance of CSVFileSystemCache for testing
     """
-    return history_data.FileSystemHistoryCache(os.fspath(tmp_path))
+    return history.FileSystemHistoryCache(os.fspath(tmp_path))
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def test_check_cache_exists_path(cache_tmp_path):
     Check that the os.path.exists() gets called with the correct path
     and check that exists is not case sensitive.
     """
-    with patch("history_data.os.path.exists") as os_path_exists:
+    with patch("history.os.path.exists") as os_path_exists:
         cache_tmp_path.exists("symbol1")
         os_path_exists.assert_called_with(
             os.path.join(cache_tmp_path.cache_dir, "symbol1.csv")
@@ -94,9 +94,9 @@ def test_history(data_source, cache_tmp_path):
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
-    history = history_data.History(data_source, cache_tmp_path)
+    hist = history.History(data_source, cache_tmp_path)
 
-    response = history.download(partial_symbol_set)
+    response = hist.download(partial_symbol_set)
     assert len(response) == len(partial_symbol_set)
     for symbol in partial_symbol_set:
         assert cache_tmp_path.exists(symbol)
@@ -104,7 +104,7 @@ def test_history(data_source, cache_tmp_path):
     for symbol in missing_symbol_set:
         assert not cache_tmp_path.exists(symbol)
 
-    response = history.download(full_symbol_set)
+    response = hist.download(full_symbol_set)
     # Check that only the missing symbols were downloaded
     # This is true if all missing symbols are in the response
     # and if the length of the response is equal to the number
@@ -117,8 +117,8 @@ def test_history(data_source, cache_tmp_path):
         assert cache_tmp_path.exists(symbol)
 
     # Try downloading again, which should be a no-op
-    response = history.download(full_symbol_set)
+    response = hist.download(full_symbol_set)
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    history.load("pqr")
+    hist.load("pqr")
