@@ -37,14 +37,6 @@ def dataframe():
 
 
 @pytest.fixture
-def cache_known_path():
-    """
-    Create an instance of CSVFileSystemCache for testing
-    """
-    return history_data.FileSystemHistoryCache(SAMPLE_PATH)
-
-
-@pytest.fixture
 def cache_tmp_path(tmp_path):
     """
     Create an instance of CSVFileSystemCache for testing
@@ -80,17 +72,21 @@ def test_cache_normal_use_sequence(cache_tmp_path):
     assert (reloaded == SAMPLE_DF).all().all()
 
 
-def test_check_cache_exists_path(cache_known_path):
+def test_check_cache_exists_path(cache_tmp_path):
     """
     Check that the os.path.exists() gets called with the correct path
     and check that exists is not case sensitive.
     """
     with patch("history_data.os.path.exists") as os_path_exists:
-        cache_known_path.exists("symbol1")
-        os_path_exists.assert_called_with(os.path.join(SAMPLE_PATH, "symbol1.csv"))
+        cache_tmp_path.exists("symbol1")
+        os_path_exists.assert_called_with(
+            os.path.join(cache_tmp_path.cache_dir, "symbol1.csv")
+        )
 
-        cache_known_path.exists("SyMbOL2")
-        os_path_exists.assert_called_with(os.path.join(SAMPLE_PATH, "symbol2.csv"))
+        cache_tmp_path.exists("SyMbOL2")
+        os_path_exists.assert_called_with(
+            os.path.join(cache_tmp_path.cache_dir, "symbol2.csv")
+        )
 
 
 def test_history(data_source, cache_tmp_path):
