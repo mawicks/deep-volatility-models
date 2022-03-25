@@ -16,11 +16,13 @@ logging.basicConfig(level=logging.INFO)
 class YFinanceSource(object):
     @staticmethod
     def _add_columns(df):
-        rename_dict = {c: utils.rename_column(c) for c in df.columns}
-        log_return = np.log(df["Adj Close"] / df["Adj Close"].shift(1))
-        new_df = df.assign(log_return=log_return)
+        new_df = df.dropna().reset_index()
+        rename_dict = {c: utils.rename_column(c) for c in new_df.columns}
+        log_return = np.log(new_df["Adj Close"] / new_df["Adj Close"].shift(1))
+        new_df = new_df.assign(log_return=log_return)
         print(rename_dict)
         new_df.rename(columns=rename_dict, inplace=True)
+        new_df.set_index("date", inplace=True)
         return new_df
 
     def price_history(

@@ -16,11 +16,11 @@ import history_data
 
 SAMPLE_DF = pd.DataFrame(
     {
-        "Date": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
-        "Open": [1.0, 2.0, 3.0],
-        "Close": [0.5, 2.5, 3.1],
+        "date": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
+        "open": [1.0, 2.0, 3.0],
+        "close": [0.5, 2.5, 3.1],
     }
-).set_index("Date")
+).set_index("date")
 
 SAMPLE_PATH = "any_path"
 

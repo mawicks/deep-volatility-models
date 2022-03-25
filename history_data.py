@@ -27,14 +27,14 @@ class FileSystemHistoryCache(object):
         return os.path.exists(self._path(symbol))
 
     def save(self, symbol: str, df: pd.DataFrame):
-        df = df.reset_index().set_index("Date")
+        df = df.reset_index().set_index("date")
         df.to_csv(self._path(symbol), index=True)
 
     def load(self, symbol: str) -> pd.DataFrame:
         return pd.read_csv(
             self._path(symbol),
-            index_col="Date",
-            parse_dates=["Date"],
+            index_col="date",
+            parse_dates=["date"],
         )
 
 
