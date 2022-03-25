@@ -18,3 +18,10 @@ def to_symbol_list(symbols: Union[Iterable[str], str]) -> List[str]:
         symbols = (symbols,)
 
     return list(map(str.upper, symbols))
+
+
+def rename_column(c):
+    """
+    Standardize column naming.  No spaces and no caps.
+    """
+    return c.lower().replace(" ", "_")

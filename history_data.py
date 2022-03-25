@@ -77,7 +77,7 @@ class History(object):
         dataframes = []
         for symbol in symbols:
             df = self.cache_mgr.load(symbol)
-            df["Symbol"] = symbol
+            df["symbol"] = symbol
             dataframes.append(df)
 
         return pd.concat(dataframes, axis=0)
