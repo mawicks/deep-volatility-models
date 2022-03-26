@@ -3,7 +3,77 @@ import torch.utils.data
 
 
 class RollingWindowSeries(torch.utils.data.Dataset):
-    """DataSet subclass for time series"""
+    """
+    Given a time series, return a sequence of rolling windows on the series.
+    This generates windows compatible for pytorch dataloader, so the kth window
+    is obtained by indexing the kth element of the output series.  Also for compatibility
+    with pytorch, the output is represented as pytorch tensors.
+
+    Example usage:
+    >>> import time_series
+
+    This modules works with either scalar time series or vector time series.
+    The first example is a sequence of scalars:
+
+    >>> series = list(range(5))
+    >>> series
+    [0, 1, 2, 3, 4]
+
+    Construct a rolling sequence of windows for the series with a window size of 3
+    and a default stride of 1.
+
+    >>> windowed_series = time_series.RollingWindowSeries(series, 3)
+
+    The first element (element 0) is a window with the first three values:
+
+    >>> windowed_series[0]
+    tensor([0., 1., 2.])
+
+    The second element (element 1) is a window with the next three values:
+
+    >>> windowed_series[1]
+    tensor([1., 2., 3.])
+
+    The third element (element 2) is a window with the next three values:
+
+    >>> windowed_series[2]
+    tensor([2., 3., 4.])
+
+    It also works for vector-valued time series with careful attention to the ordering
+    of dimensions.  Here's a sequence of vectors:
+
+    >>> vector_series = [[1, 2], [3, 4], [5, 6], [7, 8]]
+    >>> windowed_vector_series = time_series.RollingWindowSeries(vector_series, 3)
+    >>> windowed_vector_series[0]
+    tensor([[1., 3., 5.],
+            [2., 4., 6.]])
+
+    If the result seems "transposed", that's for consistency with pytorch
+    conventions for a number of functionsw.  Here's the rationale.  For
+    a sequence of vectors, the vector dimension should be thought of as the
+    "depth" dimension (e.g., RGB for images). The pytorch convention is for
+    the depth to be the first dimension (dimension 0) of the tensor and for
+    the "time" (or space) dimension to be dimension 1 for 1d or dimensions 1
+    and 2 for 2d.  When these records get batched for machine learning, the
+    convention is typically as follows:
+       dimension 0 - index of record with a batch
+       dimension 1 - depth dimension
+       dimension 2 - "time" dimension for 1d or "x" dimensions for 2d
+       dimension 3 - "y" dimension for 2d
+    Since we're looking at records before they have been batched, the convention is
+       dimension 0 - depth dimension
+       dimension 1 - "time" dimension for 1d or "x" dimensions for 2d
+       dimension 2 - "y" dimension for 2d
+
+    Continuing the exmaple, here's the next window:
+
+    >>> windowed_vector_series[1]
+    tensor([[3., 5., 7.],
+            [4., 6., 8.]])
+
+    Note: This code works for sequences of scalars of sequences of 1d vectors.
+    It does *not* work for sequences of 2d and higher tensors.
+    """
 
     def __init__(self, series, sequence_length, stride=1):
         if stride <= 0:
