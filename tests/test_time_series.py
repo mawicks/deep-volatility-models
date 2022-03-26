@@ -64,9 +64,12 @@ def test_rolling_window_series(series, window, stride, expected):
     d = time_series.RollingWindowSeries(series, window, stride=stride)
     assert len(d) == len(expected)
 
+    # We use indexes here rather than iterators because we're specifically
+    # testing the implementation of __getitem__()
     for i in range(len(expected)):
         assert (d[i] == expected[i]).all()
 
+    # Make sure negative indexes work
     for i in range(-len(expected), 0):
         assert (d[i] == expected[i]).all()
 
@@ -120,6 +123,8 @@ def test_target_selection(series, window, stride, expected_cov, expected_target)
 
     assert len(cts) == len(expected_target)
 
+    # We use indexes here rather than iterators because we're specifically
+    # testing the implementation of __getitem__()
     for i in range(len(expected_target)):
         cov, target = cts[i]
         assert (cov == expected_cov[i]).all()
