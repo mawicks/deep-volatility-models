@@ -67,6 +67,9 @@ def test_rolling_window_series(series, window, stride, expected):
     # We use indexes here rather than iterators because we're specifically
     # testing the implementation of __getitem__()
     for i in range(len(expected)):
+        print(f"\nwindow returned:\n{d[i]}")
+        print(f"window expected:\n{expected[i]}")
+        assert d[i].shape == expected[i].shape
         assert (d[i] == expected[i]).all()
 
     # Make sure negative indexes work
@@ -92,7 +95,12 @@ def test_rolling_window_series(series, window, stride, expected):
                 torch.tensor([4, 5]),
                 torch.tensor([6, 7]),
             ],
-            [2, 4, 6, 8],
+            [
+                torch.tensor(2),
+                torch.tensor(4),
+                torch.tensor(6),
+                torch.tensor(8),
+            ],
         ),
         # Check a sequence of vectors
         (
@@ -110,9 +118,9 @@ def test_rolling_window_series(series, window, stride, expected):
                 torch.tensor([[7], [8], [9]]),
             ],
             [
-                torch.tensor([[4], [5], [6]]),
-                torch.tensor([[7], [8], [9]]),
-                torch.tensor([[10], [11], [12]]),
+                torch.tensor([4, 5, 6]),
+                torch.tensor([7, 8, 9]),
+                torch.tensor([10, 11, 12]),
             ],
         ),
     ],
@@ -127,7 +135,14 @@ def test_target_selection(series, window, stride, expected_cov, expected_target)
     # testing the implementation of __getitem__()
     for i in range(len(expected_target)):
         cov, target = cts[i]
+        print(f"cov returned:\n\n{cov}")
+        print(f"cov expected:\n{expected_cov[i]}")
+        assert cov.shape == expected_cov[i].shape
         assert (cov == expected_cov[i]).all()
+
+        print(f"\ntarget returned:\n{target}")
+        print(f"target expected:\n{expected_target[i]}")
+        assert target.shape == expected_target[i].shape
         assert (target == expected_target[i]).all()
 
     # Make sure negatives indexes work

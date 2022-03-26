@@ -140,11 +140,15 @@ class ContextAndTargetSeries(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         t = self.__time_series_dataset[index]
-        if len(t.shape) == 1:
+        if len(t.shape) == 1:  # Sequence of scalars
             covariates = t[: -self.__target_dim]
             target = t[-self.__target_dim :]
-        else:
+        else:  # Sequence of vectors
             covariates = t[:, : -self.__target_dim]
             target = t[:, -self.__target_dim :]
+
+        # Drop the last dimension when it's one.
+        if self.__target_dim == 1:
+            target = target.squeeze(-1)
 
         return covariates, target
