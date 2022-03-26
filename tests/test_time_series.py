@@ -1,7 +1,6 @@
 import pytest
 
 # Third party libraries
-import numpy as np
 import torch
 
 # Local modules
