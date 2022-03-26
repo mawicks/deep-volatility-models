@@ -26,17 +26,6 @@ SAMPLE_PATH = "any_path"
 
 
 @pytest.fixture
-def dataframe():
-    """
-    Create a mock dataframe fixture with the same API as a real dataframe
-    """
-    mock_df = create_autospec(SAMPLE_DF)
-    mock_df.to_csv = create_autospec(SAMPLE_DF.to_csv)
-    mock_df.reset_index = create_autospec(SAMPLE_DF.reset_index)
-    return mock_df
-
-
-@pytest.fixture
 def cache_tmp_path(tmp_path):
     """
     Create an instance of CSVFileSystemCache for testing
