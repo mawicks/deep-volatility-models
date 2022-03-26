@@ -127,17 +127,13 @@ class RollingWindowSeries(torch.utils.data.Dataset):
 class ContextAndTargetSeries(torch.utils.data.Dataset):
     """Split time series slices into covariates and target"""
 
-    def __init__(self, rolling_window_series, target_dim=1, label=None):
+    def __init__(self, rolling_window_series, target_dim=1):
         """Generally, the stride used to construct Dataset should be equal to
         target_dim
 
         """
         self.__time_series_dataset = rolling_window_series
         self.__target_dim = target_dim
-        if label is not None:
-            self.__label = torch.tensor(label)
-        else:
-            self.__label = None
 
     def __len__(self):
         return len(self.__time_series_dataset)
@@ -151,7 +147,4 @@ class ContextAndTargetSeries(torch.utils.data.Dataset):
             covariates = t[:, : -self.__target_dim]
             target = t[:, -self.__target_dim :]
 
-        if self.__label is None:
-            return covariates, target
-        else:
-            return self.__label, covariates, target
+        return covariates, target
