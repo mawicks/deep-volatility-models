@@ -39,8 +39,14 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     >>> windowed_series[2]
     tensor([2., 3., 4.])
 
-    It also works for vector-valued time series with careful attention to the ordering
-    of dimensions.  Here's a sequence of vectors:
+    RollingWindowSeries also works for vector-valued time series if you following
+    some conventions about the ordering of dimensions.  We assume that the first
+    dimension of the input (dimension 0) represents time since it's a sequence
+    of vectors.  This is a natural convention for the input sequence, however,
+    we follow the pytorch convention on the output.  The pytorch convention is
+    that the *last* dimension represents time.
+
+    An example will clarify these ideas.
 
     >>> vector_series = [[1, 2], [3, 4], [5, 6], [7, 8]]
     >>> windowed_vector_series = time_series.RollingWindowSeries(vector_series, 3)
@@ -48,31 +54,41 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     tensor([[1., 3., 5.],
             [2., 4., 6.]])
 
-    If the result seems "transposed", that's for consistency with pytorch
-    conventions for a number of functionsw.  Here's the rationale.  For
+    The result may seem "transposed", but that's for consistency with pytorch
+    conventions used in a number of functions.  Here's the rationale.  For
     a sequence of vectors, the vector dimension should be thought of as the
     "depth" dimension (e.g., RGB for images). The pytorch convention is for
     the depth to be the first dimension (dimension 0) of the tensor and for
     the "time" (or space) dimension to be dimension 1 for 1d or dimensions 1
-    and 2 for 2d.  When these records get batched for machine learning, the
-    convention is typically as follows:
-       dimension 0 - index of record with a batch
-       dimension 1 - depth dimension
+    and 2 for 2d.  When these records get batched for machine learning, the index
+    of the record is always dimension 0, so the depth becomes dimension 1,
+    and "time" becomes dimension 2.  The convention for batched records is
+    typically as follows:
+
+       dimension 0 - index of record within a batch
+       dimension 1 - "depth" dimension
        dimension 2 - "time" dimension for 1d or "x" dimensions for 2d
        dimension 3 - "y" dimension for 2d
+
     Since we're looking at records before they have been batched, the convention is
-       dimension 0 - depth dimension
+
+       dimension 0 - "depth" dimension
        dimension 1 - "time" dimension for 1d or "x" dimensions for 2d
        dimension 2 - "y" dimension for 2d
 
+    More generally, the pytorch convention for time series (or any 1d signal)
+    is that time (or whatever the 1d dimension represents) should always be
+    the *last* dimension.  For images, "x" and "y" should be the last
+    *two* dimensions.
     Continuing the exmaple, here's the next window:
 
     >>> windowed_vector_series[1]
     tensor([[3., 5., 7.],
             [4., 6., 8.]])
 
-    Note: This code works for sequences of scalars of sequences of 1d vectors.
-    It does *not* work for sequences of 2d and higher tensors.
+    Note: This code currently works for sequences of scalars and sequences of 1d vectors.
+    TODO: Make this code work for sequences of tensors with two or more diemsions while following
+    the above conventions that "time" should be the last dimension.
     """
 
     def __init__(self, series, sequence_length, stride=1):
