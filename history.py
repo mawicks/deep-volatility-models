@@ -116,6 +116,11 @@ if __name__ == "__main__":  # pragma: no cover
     history = History(data_source, cache)
     symbols = ["QQQ", "SPY", "BND", "EDV"]
     df = history.load(symbols, overwrite_existing=False)
-    print(df.loc[:, (symbols, "log_return")])
 
-    print(df.loc[:, (symbols[0], "log_return")])
+    selection = df.loc[:, (symbols, "log_return")]
+    print(selection)
+    print(selection.values.shape)
+
+    selection = df.loc[:, (symbols[0], "log_return")]
+    print(selection)
+    print(selection.values.shape)
