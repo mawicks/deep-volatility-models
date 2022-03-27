@@ -11,14 +11,22 @@ def test_rolling_window_arg_check():
     with pytest.raises(ValueError):
         time_series.RollingWindowSeries(range(10), 3, stride=0)
 
+    with pytest.raises(ValueError):
+        time_series.RollingWindowSeries(
+            [[1, 3], [3, 4], [5, 6]],
+            2,
+            create_channel_dim=True,
+        )
+
 
 @pytest.mark.parametrize(
-    "series,window,stride,expected",
+    "series,window,stride,create_channel_dim,expected",
     [
         (
             range(10),
             3,
             1,
+            False,
             [
                 torch.tensor(range(0, 3)),
                 torch.tensor(range(1, 4)),
@@ -35,11 +43,29 @@ def test_rolling_window_arg_check():
             range(10),
             3,
             2,
+            False,
             [
                 torch.tensor(range(0, 3)),
                 torch.tensor(range(2, 5)),
                 torch.tensor(range(4, 7)),
                 torch.tensor(range(6, 9)),
+            ],
+        ),
+        # Same case with create_channel_dim=True
+        (
+            range(10),
+            3,
+            1,
+            True,
+            [
+                torch.tensor([list(range(0, 3))]),
+                torch.tensor([list(range(1, 4))]),
+                torch.tensor([list(range(2, 5))]),
+                torch.tensor([list(range(3, 6))]),
+                torch.tensor([list(range(4, 7))]),
+                torch.tensor([list(range(5, 8))]),
+                torch.tensor([list(range(6, 9))]),
+                torch.tensor([list(range(7, 10))]),
             ],
         ),
         # Check a sequence of vectors
@@ -52,6 +78,7 @@ def test_rolling_window_arg_check():
             ],
             2,
             1,
+            False,
             [
                 torch.tensor([[1, 4], [2, 5], [3, 6]]),
                 torch.tensor([[4, 7], [5, 8], [6, 9]]),
@@ -60,8 +87,10 @@ def test_rolling_window_arg_check():
         ),
     ],
 )
-def test_rolling_window_series(series, window, stride, expected):
-    d = time_series.RollingWindowSeries(series, window, stride=stride)
+def test_rolling_window_series(series, window, stride, create_channel_dim, expected):
+    d = time_series.RollingWindowSeries(
+        series, window, stride=stride, create_channel_dim=create_channel_dim
+    )
     assert len(d) == len(expected)
 
     # We use indexes here rather than iterators because we're specifically

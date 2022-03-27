@@ -1,3 +1,5 @@
+from typing import Iterable, Any
+
 import torch
 import torch.utils.data
 
@@ -41,13 +43,21 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     >>> windowed_series[2]
     tensor([2., 3., 4.])
 
+    For use with convolutional neworks, it's often necessary to create a channel dimension:
+
+    >>> windowed_series = time_series.RollingWindowSeries(series, 3, create_channel_dim=True)
+    >>> windowed_series[0]
+    tensor([[0., 1., 2.]])
+
     RollingWindowSeries also works for vector-valued time series as long as you
     understand some conventions about the ordering of dimensions.  We assume
     that the first dimension of the input (dimension 0) represents time.  In
     other words, we assume the input is a sequence of vectors.  This is a
     natural convention for the input sequence.  However, we follow the pytorch
     convention on the output.  The pytorch convention is that the *last*
-    dimension represents time.
+    dimension represents time.  In effect, the vector dimension becomes the
+    channel dimension, so the `create_channel_dim` option is meaningless in this
+    case.
 
     An example will clarify these ideas.
 
@@ -95,14 +105,32 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     last dimension.
     """
 
-    def __init__(self, series, sequence_length, stride=1):
+    def __init__(
+        self,
+        series: Iterable[Any],
+        sequence_length: int,
+        stride: int = 1,
+        create_channel_dim: bool = False,
+        dtype: type = torch.float,
+    ):
         if stride <= 0:
-            raise ValueError()
+            raise ValueError("Stride cannot be negative")
 
         self.__series = tuple(series)
+
+        if (
+            len(self.__series) > 0
+            and hasattr(self.__series[0], "__len__")
+            and len(self.__series[0]) > 0
+            and create_channel_dim
+        ):
+            raise ValueError("create_channel_dim should be False for this series shape")
+
         self.__sequence_length = sequence_length
         self.__stride = stride
         self.__length = (len(self.__series) - sequence_length) // stride + 1
+        self.__create_channel_dim = create_channel_dim
+        self.__dtype = dtype
 
     def __len__(self):
         return self.__length
@@ -114,12 +142,16 @@ class RollingWindowSeries(torch.utils.data.Dataset):
         if index >= 0 and index < self.__length:
             start = index * self.__stride
             result = torch.tensor(
-                self.__series[start : start + self.__sequence_length], dtype=torch.float
+                self.__series[start : start + self.__sequence_length],
+                dtype=self.__dtype,
             )
             if len(result.shape) == 1:
-                return result
+                if self.__create_channel_dim:
+                    result = result.unsqueeze(0)
             else:
-                return result.t()
+                result = result.t()
+
+            return result
         else:
             raise IndexError()
 
@@ -127,7 +159,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
 class ContextAndTargetSeries(torch.utils.data.Dataset):
     """Split time series slices into covariates and target"""
 
-    def __init__(self, rolling_window_series, target_dim=1):
+    def __init__(self, rolling_window_series, target_dim: int = 1):
         """Generally, the stride used to construct Dataset should be equal to
         target_dim
 
