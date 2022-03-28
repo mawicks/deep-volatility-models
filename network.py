@@ -1,3 +1,4 @@
+from this import d
 import torch.nn
 
 # Mixture tuning parametrers
@@ -105,34 +106,33 @@ class UnivariateMixture64(torch.nn.Module):
 
         self.limiter = MinMaxClamping()
         self.noise = GaussianNoise(gaussian_noise)
-        self.context_pipeline = torch.nn.Sequential(
-            # Assume content has 64 elements
+
+        layers = [
             self.limiter,
             self.noise,
-            torch.nn.Conv1d(input_channels, feature_dimension, 4, stride=4, padding=0),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # channel shape is (feature_dimension, 16)
-            torch.nn.Conv1d(
-                feature_dimension, feature_dimension, 4, stride=4, padding=0
-            ),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # channel shape is (feature_dimension, 4)
-            torch.nn.Conv1d(feature_dimension, feature_dimension, 4),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # Now have feature_dimension in a single slot
-            # Do one more mixing layer.
-            torch.nn.Conv1d(feature_dimension, feature_dimension, 1),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout)
-            # Should have one channel of depth feature_dimension
-        )
+        ]
+
+        def block(input_channels, width):
+            return [
+                torch.nn.Conv1d(
+                    input_channels, feature_dimension, width, stride=width, padding=0
+                ),
+                batch_norm_factory_1d(feature_dimension, use_batch_norm),
+                activation,
+                torch.nn.Dropout2d(p=dropout),
+            ]
+
+        layers.extend(block(input_channels, 4))
+
+        for _ in range(2):
+            layers.extend(block(feature_dimension, 4))
+
+        # Do one more mixing layer.
+        layers.extend(block(feature_dimension, 1))
+
+        self.context_pipeline = torch.nn.Sequential(*layers)
+
+        # Should have one channel of depth feature_dimension
 
         self.latent_pipeline = torch.nn.Sequential(
             torch.nn.Linear(
@@ -159,7 +159,7 @@ class UnivariateMixture64(torch.nn.Module):
             (output_channels, input_channels),
         )
 
-    def dimensions(self):
+    def __dimensions(self):
         features_dimension = self.sigma_inv_output.in_channels
         components = self.sigma_inv_output.out_channels
         output_channels, input_channels = self.sigma_inv_output.kernel_size
