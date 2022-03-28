@@ -147,9 +147,9 @@ def test_rolling_window_series(series, window, stride, create_channel_dim, expec
                 torch.tensor([[7], [8], [9]]),
             ],
             [
-                torch.tensor([4, 5, 6]),
-                torch.tensor([7, 8, 9]),
-                torch.tensor([10, 11, 12]),
+                torch.tensor([[4], [5], [6]]),
+                torch.tensor([[7], [8], [9]]),
+                torch.tensor([[10], [11], [12]]),
             ],
         ),
     ],
