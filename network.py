@@ -80,22 +80,22 @@ class TimeSeriesFeatures(torch.nn.Module):
     """
 
     @property
-    def context_size(self):
-        return 64
+    def window_size(self):
+        return (self.window_size,)
 
     def __init__(
         self,
-        input_channels,
-        feature_dimension=DEFAULT_MIXTURE_FEATURES,
-        gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
+        input_channels: int,
+        window_size: int,
+        feature_dimension: int = DEFAULT_MIXTURE_FEATURES,
+        gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
-        dropout=DEFAULT_DROPOUT_P,
-        use_batch_norm=True,
+        dropout: float = DEFAULT_DROPOUT_P,
+        use_batch_norm: bool = True,
     ):
         super().__init__()
 
-        self.limiter = MinMaxClamping()
-        self.noise = GaussianNoise(gaussian_noise)
+        self._window_size = window_size
 
         layers = [
             MinMaxClamping(),
@@ -113,26 +113,36 @@ class TimeSeriesFeatures(torch.nn.Module):
             ]
 
         layers.extend(block(input_channels, 4))
+        window_size //= 4
 
-        for _ in range(2):
+        while window_size > 1:
             layers.extend(block(feature_dimension, 4))
+            window_size //= 4
+
+        if window_size != 1:
+            raise ValueError("window_size must be a power of 4")
+        # Should have one "pixel" of depth feature_dimension
 
         # Do one more mixing layer.
         layers.extend(block(feature_dimension, 1))
 
         self.sequential = torch.nn.Sequential(*layers)
 
-        # Should have one channel of depth feature_dimension
-
-    def forward(self, context):
+    def forward(self, window):
         """
         Argument:
            context: (minibatch_size, channels, 64)
         Returns:
            latents - (minibatch_size, feature_dimension)
         """
-        # Run through context pipeline squeeze to flatten
-        return self.sequential(context)
+
+        output = self.sequential(window)
+        # The dimension of output is (batch, feature_dimensions, 1).  We'll
+        # adopt the convention that this network produces a flattened feature
+        # vector (not a series), so we remove the last dimension.  In some cases
+        # caller may want to add it back if additional convolutional processing
+        # is necessary.
+        return output.squeeze(2)
 
 
 class UnivariateMixture64(torch.nn.Module):
@@ -164,6 +174,7 @@ class UnivariateMixture64(torch.nn.Module):
 
         self.time_series_features = TimeSeriesFeatures(
             input_channels,
+            64,
             feature_dimension=feature_dimension,
             gaussian_noise=gaussian_noise,
             dropout=dropout,
@@ -218,9 +229,9 @@ class UnivariateMixture64(torch.nn.Module):
         latents = self.time_series_features(context)
 
         if embedding is not None:
-            latents = torch.cat((latents, embedding.unsqueeze(2)), dim=1)
+            latents = torch.cat((latents, embedding), dim=1)
 
-        latents = self.latent_pipeline(latents.squeeze(2)).unsqueeze(2)
+        latents = self.latent_pipeline(latents).unsqueeze(2)
 
         mu = self.mu_output(latents)
         log_p_raw = self.p_output(latents).squeeze(2)
