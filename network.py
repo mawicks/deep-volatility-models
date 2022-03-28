@@ -1,4 +1,5 @@
 from this import d
+from matplotlib import use
 import torch.nn
 
 # Mixture tuning parametrers
@@ -73,14 +74,9 @@ class GaussianNoise(torch.nn.Module):
         return input_tensor
 
 
-class UnivariateMixture64(torch.nn.Module):
+class TimeSeriesFeatures(torch.nn.Module):
     """
-    Arguments:
-       context (tensor of dim 64)
-       value (tensor of dim 1)
-
-    Returns:
-       log odds of prediction (tensor of dim 1)
+    TODO
     """
 
     @property
@@ -90,10 +86,7 @@ class UnivariateMixture64(torch.nn.Module):
     def __init__(
         self,
         input_channels,
-        output_channels=None,
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
-        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
-        embedding_dimension=0,
         gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
         dropout=DEFAULT_DROPOUT_P,
@@ -101,15 +94,12 @@ class UnivariateMixture64(torch.nn.Module):
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
-
         self.limiter = MinMaxClamping()
         self.noise = GaussianNoise(gaussian_noise)
 
         layers = [
-            self.limiter,
-            self.noise,
+            MinMaxClamping(),
+            GaussianNoise(gaussian_noise),
         ]
 
         def block(input_channels, width):
@@ -130,9 +120,55 @@ class UnivariateMixture64(torch.nn.Module):
         # Do one more mixing layer.
         layers.extend(block(feature_dimension, 1))
 
-        self.context_pipeline = torch.nn.Sequential(*layers)
+        self.sequential = torch.nn.Sequential(*layers)
 
         # Should have one channel of depth feature_dimension
+
+    def forward(self, context):
+        """
+        Argument:
+           context: (minibatch_size, channels, 64)
+        Returns:
+           latents - (minibatch_size, feature_dimension)
+        """
+        # Run through context pipeline squeeze to flatten
+        return self.sequential(context)
+
+
+class UnivariateMixture64(torch.nn.Module):
+    """
+    Arguments:
+       context (tensor of dim 64)
+       value (tensor of dim 1)
+
+    Returns:
+       log odds of prediction (tensor of dim 1)
+    """
+
+    @property
+    def context_size(self):
+        return 64
+
+    def __init__(
+        self,
+        input_channels,
+        feature_dimension=DEFAULT_MIXTURE_FEATURES,
+        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+        embedding_dimension=0,
+        gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
+        activation=relu,
+        dropout=DEFAULT_DROPOUT_P,
+        use_batch_norm=True,
+    ):
+        super().__init__()
+
+        self.time_series_features = TimeSeriesFeatures(
+            input_channels,
+            feature_dimension=feature_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+        )
 
         self.latent_pipeline = torch.nn.Sequential(
             torch.nn.Linear(
@@ -143,7 +179,7 @@ class UnivariateMixture64(torch.nn.Module):
         )
 
         self.mu_output = torch.nn.ConvTranspose1d(
-            feature_dimension + embedding_dimension, mixture_components, output_channels
+            feature_dimension + embedding_dimension, mixture_components, input_channels
         )
         self.p_output = torch.nn.Conv1d(
             feature_dimension + embedding_dimension, mixture_components, 1
@@ -156,7 +192,7 @@ class UnivariateMixture64(torch.nn.Module):
         self.sigma_inv_output = torch.nn.ConvTranspose2d(
             feature_dimension + embedding_dimension,
             mixture_components,
-            (output_channels, input_channels),
+            (input_channels, input_channels),
         )
 
     def __dimensions(self):
@@ -164,10 +200,6 @@ class UnivariateMixture64(torch.nn.Module):
         components = self.sigma_inv_output.out_channels
         output_channels, input_channels = self.sigma_inv_output.kernel_size
         return features_dimension, components, output_channels, input_channels
-
-    def just_latents(self, context):
-        latents = self.context_pipeline(context)
-        return latents
 
     def forward(self, context, embedding=None, return_latents=False, debug=False):
         """
@@ -183,22 +215,12 @@ class UnivariateMixture64(torch.nn.Module):
 
         """
         # Run through context pipeline squeeze to flatten
-        latents = self.just_latents(context)
+        latents = self.time_series_features(context)
 
         if embedding is not None:
             latents = torch.cat((latents, embedding.unsqueeze(2)), dim=1)
 
-        # This check keeps this code backward compatible with
-        # pre-existing model files that don't have embedding and don't have
-        # latent_pipeline attributes.  We also need to presever
-        # the channel dimension for backward compatibility where
-        # the channel indicates the stock for multivariate portfolios.
-        # Latents are only used for single symbols, so we remove the chennel,
-        # apply another layer, and then restore the channel because the output
-        # layers expect a channel.
-
-        if hasattr(self, "latent_pipeline"):
-            latents = self.latent_pipeline(latents.squeeze(2)).unsqueeze(2)
+        latents = self.latent_pipeline(latents.squeeze(2)).unsqueeze(2)
 
         mu = self.mu_output(latents)
         log_p_raw = self.p_output(latents).squeeze(2)
