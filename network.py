@@ -213,7 +213,7 @@ class UnivariateMixture64(torch.nn.Module):
         output_channels, input_channels = self.sigma_inv_output.kernel_size
         return features_dimension, components, output_channels, input_channels
 
-    def forward(self, context, embedding=None, return_latents=False, debug=False):
+    def forward(self, context, embedding=None):
         """
         Argument:
            context: (minibatch_size, channels, 64)
@@ -236,14 +236,14 @@ class UnivariateMixture64(torch.nn.Module):
         latents = self.latent_pipeline(latents)
         log_p_raw = self.p_output(latents)
 
-        # The network for mu uses a 1D de-convolutional layer which require the
-        # input to be sequence-like.  Create an artificial sequence dimension
-        # before calling.
+        # The network for mu uses a 1d one-pixel de-convolutional layer which
+        # require the input to be sequence-like.  Create an artificial sequence
+        # dimension before calling.
         latents_1d = latents.unsqueeze(2)
         mu = self.mu_output(latents_1d)
 
-        # The network for sigma_inv uses a 2D de-convolutional layer which
-        # requires the input to be image-like.  Create artificial x and y
+        # The network for sigma_inv uses a 2d one-pixel de-convolutional layer
+        # which requires the input to be image-like.  Create artificial x and y
         # dimensions before calling.
         latents_2d = latents_1d.unsqueeze(3)
         sigma_inv = self.sigma_inv_output(latents_2d)
@@ -257,15 +257,7 @@ class UnivariateMixture64(torch.nn.Module):
             mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
             sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
-        if debug:
-            print("latents: ", latents)
-            print("log_p_raw", log_p_raw)
-            print("sigma_inv", sigma_inv)
-
-        if return_latents:
-            return log_p_raw, mu, sigma_inv, latents
-        else:
-            return log_p_raw, mu, sigma_inv
+        return log_p_raw, mu, sigma_inv, latents
 
 
 class MultivariateMixture64(torch.nn.Module):

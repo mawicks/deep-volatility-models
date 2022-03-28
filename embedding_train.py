@@ -242,7 +242,7 @@ def main(
             true_values = true_values.to(device)
 
             symbol_embedding = embeddings(symbol_encoding)
-            log_p_raw, mu, inv_sigma = n_network(context, symbol_embedding)
+            log_p_raw, mu, inv_sigma = n_network(context, symbol_embedding)[:3]
             log_p = logsoftmax(log_p_raw)
 
             mb_size, components, channels = mu.shape
@@ -329,7 +329,9 @@ def main(
                     symbol_encoding = symbol_encoding.to(device)
 
                     symbol_embedding = embeddings(symbol_encoding)
-                    log_p_raw, mu, inv_sigma = network_copy(context, symbol_embedding)
+                    log_p_raw, mu, inv_sigma = network_copy(context, symbol_embedding)[
+                        :3
+                    ]
                     log_p = logsoftmax(log_p_raw)
 
                     mb_size, components, channels = mu.shape
