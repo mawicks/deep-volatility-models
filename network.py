@@ -189,11 +189,12 @@ class UnivariateMixture64(torch.nn.Module):
             activation,
         )
 
+        self.p_output = torch.nn.Linear(
+            feature_dimension + embedding_dimension, mixture_components
+        )
+
         self.mu_output = torch.nn.ConvTranspose1d(
             feature_dimension + embedding_dimension, mixture_components, input_channels
-        )
-        self.p_output = torch.nn.Conv1d(
-            feature_dimension + embedding_dimension, mixture_components, 1
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -225,21 +226,27 @@ class UnivariateMixture64(torch.nn.Module):
            softmax to it to produce probabilities.
 
         """
-        # Run through context pipeline squeeze to flatten
+        # Get a "flat" feature vector for the series.
         latents = self.time_series_features(context)
 
+        # Concatenate time series feature with embedding.
         if embedding is not None:
             latents = torch.cat((latents, embedding), dim=1)
 
-        latents = self.latent_pipeline(latents).unsqueeze(2)
+        latents = self.latent_pipeline(latents)
+        log_p_raw = self.p_output(latents)
 
-        mu = self.mu_output(latents)
-        log_p_raw = self.p_output(latents).squeeze(2)
+        # The network for mu uses a 1D de-convolutional layer which require the
+        # input to be sequence-like.  Create an artificial sequence dimension
+        # before calling.
+        latents_1d = latents.unsqueeze(2)
+        mu = self.mu_output(latents_1d)
 
-        # Because we're using ConvTranspose2d to construct a
-        # covariance matrix, here we convince ConvTranspose2d
-        # that the input is 2D by adding a dimension using unsqueeze.
-        sigma_inv = self.sigma_inv_output(latents.unsqueeze(3))
+        # The network for sigma_inv uses a 2D de-convolutional layer which
+        # requires the input to be image-like.  Create artificial x and y
+        # dimensions before calling.
+        latents_2d = latents_1d.unsqueeze(3)
+        sigma_inv = self.sigma_inv_output(latents_2d)
 
         # FIXME:  For compatibility with previously saved models
         # we get the shape from sigma_inv rather than from object state.
