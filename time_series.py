@@ -175,12 +175,11 @@ class ContextAndTargetSeries(torch.utils.data.Dataset):
         if len(t.shape) == 1:  # Sequence of scalars
             covariates = t[: -self.__target_dim]
             target = t[-self.__target_dim :]
+            # Drop the last dimension when it's one.
+            if self.__target_dim == 1:
+                target = target.squeeze(-1)
         else:  # Sequence of vectors
             covariates = t[:, : -self.__target_dim]
             target = t[:, -self.__target_dim :]
-
-        # Drop the last dimension when it's one.
-        if self.__target_dim == 1:
-            target = target.squeeze(-1)
 
         return covariates, target
