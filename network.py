@@ -88,6 +88,7 @@ class TimeSeriesFeatures(torch.nn.Module):
         input_channels: int,
         window_size: int,
         feature_dimension: int = DEFAULT_MIXTURE_FEATURES,
+        exogenous_dimension: int = 0,
         gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
         dropout: float = DEFAULT_DROPOUT_P,
@@ -121,28 +122,50 @@ class TimeSeriesFeatures(torch.nn.Module):
 
         if window_size != 1:
             raise ValueError("window_size must be a power of 4")
-        # Should have one "pixel" of depth feature_dimension
+        # Should have one "pixel" with a depth of feature_dimension
 
         # Do one more mixing layer.
         layers.extend(block(feature_dimension, 1))
 
-        self.sequential = torch.nn.Sequential(*layers)
+        self.convolutional_layers = torch.nn.Sequential(*layers)
 
-    def forward(self, window):
+        self.combine_exogenous = torch.nn.Sequential(
+            torch.nn.Linear(
+                feature_dimension + exogenous_dimension,
+                feature_dimension + exogenous_dimension,
+            ),
+            activation,
+        )
+
+    def forward(self, window, exogenous=None):
         """
         Argument:
-           context: (minibatch_size, channels, 64)
+           context: (minibatch_size, channels, window_size)
         Returns:
            latents - (minibatch_size, feature_dimension)
         """
 
-        output = self.sequential(window)
-        # The dimension of output is (batch, feature_dimensions, 1).  We'll
-        # adopt the convention that this network produces a flattened feature
-        # vector (not a series), so we remove the last dimension.  In some cases
-        # caller may want to add it back if additional convolutional processing
-        # is necessary.
-        return output.squeeze(2)
+        time_series_features = self.convolutional_layers(window)
+
+        # The dimension of `time_series_features`` is (batch,
+        # feature_dimensions, 1).  We'll adopt the convention that this network
+        # produces a flattened feature vector (not a series), so we remove the
+        # last dimension.  In some cases caller may want to add it back if
+        # additional convolutional processing is necessary.  Also, this makes
+        # the dimension conform with the exogenous inputs (which the output will
+        # be combined with), which do not have this extra dimension.
+
+        time_series_features = time_series_features.squeeze(2)
+
+        # Concatenate time series feature vector with exogenous features
+        # and allow them to interact with another layer
+        if exogenous is not None:
+            output = torch.cat((time_series_features, exogenous), dim=1)
+            output = self.combine_exogenous(output)
+        else:
+            output = time_series_features
+
+        return output
 
 
 class UnivariateMixture64(torch.nn.Module):
@@ -164,7 +187,7 @@ class UnivariateMixture64(torch.nn.Module):
         input_channels,
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
         mixture_components=DEFAULT_MIXTURE_COMPONENTS,
-        embedding_dimension=0,
+        exogenous_dimension=0,
         gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
         dropout=DEFAULT_DROPOUT_P,
@@ -176,25 +199,18 @@ class UnivariateMixture64(torch.nn.Module):
             input_channels,
             64,
             feature_dimension=feature_dimension,
+            exogenous_dimension=exogenous_dimension,
             gaussian_noise=gaussian_noise,
             dropout=dropout,
             use_batch_norm=use_batch_norm,
         )
 
-        self.latent_pipeline = torch.nn.Sequential(
-            torch.nn.Linear(
-                feature_dimension + embedding_dimension,
-                feature_dimension + embedding_dimension,
-            ),
-            activation,
-        )
-
         self.p_output = torch.nn.Linear(
-            feature_dimension + embedding_dimension, mixture_components
+            feature_dimension + exogenous_dimension, mixture_components
         )
 
         self.mu_output = torch.nn.ConvTranspose1d(
-            feature_dimension + embedding_dimension, mixture_components, input_channels
+            feature_dimension + exogenous_dimension, mixture_components, input_channels
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -202,7 +218,7 @@ class UnivariateMixture64(torch.nn.Module):
         # square covariance matrix of the same dimension as the
         # output.
         self.sigma_inv_output = torch.nn.ConvTranspose2d(
-            feature_dimension + embedding_dimension,
+            feature_dimension + exogenous_dimension,
             mixture_components,
             (input_channels, input_channels),
         )
@@ -227,13 +243,8 @@ class UnivariateMixture64(torch.nn.Module):
 
         """
         # Get a "flat" feature vector for the series.
-        latents = self.time_series_features(context)
+        latents = self.time_series_features(context, embedding)
 
-        # Concatenate time series feature with embedding.
-        if embedding is not None:
-            latents = torch.cat((latents, embedding), dim=1)
-
-        latents = self.latent_pipeline(latents)
         log_p_raw = self.p_output(latents)
 
         # The network for mu uses a 1d one-pixel de-convolutional layer which

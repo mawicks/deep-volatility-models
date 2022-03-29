@@ -79,7 +79,7 @@ def get_model(context_size=64, model_file=None):
             1,
             feature_dimension=FEATURE_DIMENSION,
             mixture_components=MIXTURE_COMPONENTS,
-            embedding_dimension=EMBEDDING_DIMENSION,
+            exogenous_dimension=EMBEDDING_DIMENSION,
             dropout=DROPOUT_P,
             use_batch_norm=USE_BATCH_NORM,
             activation=ACTIVATION,
