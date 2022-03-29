@@ -13,11 +13,12 @@ DEFAULT_BATCH_EPS = 1e-4
 MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
 SIGMA_INV_CLAMP = 1000.0
 
-softmax = torch.nn.Softmax(dim=1)
+logsoftmax = torch.nn.LogSoftmax(dim=1)
+
+# Instances of various activation functions for convenience
 relu = torch.nn.ReLU()
 softplus = torch.nn.Softplus()
 sigmoid = torch.nn.Sigmoid()
-# logsoftmax = torch.nn.LogSoftmax(dim=1)
 tanh = torch.nn.Tanh()
 
 
@@ -206,23 +207,20 @@ class UnivariateHead(torch.nn.Module):
         Argument:
            latents: (minibatch_size, feature_dimension)
         Returns:
-           log_p_raw: (minibatch_size, components)
+           log_p: (minibatch_size, components)
            mu: (minibatch_size, components, output_symbols)
            sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
-        Notes:
-           log_p_raw is "raw" in the sense in that the caller must apply a
-           softmax to it to produce probabilities.
 
         """
         # The unsqueeze() calls are required to maintain dimensions that comform
         # with the multivarate case.  In the multivate case, mu is a vector
         # (with dimension equal to the number of symbols) and sigma_inv is a
         # matrix (with row and colum dimensions equal to the number of symbols)
-        log_p_raw = self.p_head(latents)
+        log_p = logsoftmax(self.p_head(latents))
         mu = self.mu_head(latents).unsqueeze(2)
         sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
 
-        return log_p_raw, mu, sigma_inv, latents
+        return log_p, mu, sigma_inv, latents
 
 
 class MultivariateHead(torch.nn.Module):
@@ -269,15 +267,12 @@ class MultivariateHead(torch.nn.Module):
         Argument:
            latents: (minibatch_size, feature_dimension)
         Returns:
-           log_p_raw: (minibatch_size, components)
+           log_p: (minibatch_size, components)
            mu: (minibatch_size, components, output_symbols)
            sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
-        Notes:
-           log_p_raw is "raw" in the sense in that the caller must apply a
-           softmax to it to produce probabilities.
 
         """
-        log_p_raw = self.p_head(latents)
+        log_p = logsoftmax(self.p_head(latents))
 
         # The network for mu uses a 1d one-pixel de-convolutional layer which
         # require the input to be sequence-like.  Create an artificial sequence
@@ -296,7 +291,7 @@ class MultivariateHead(torch.nn.Module):
         output_channels, input_channels = sigma_inv.shape[2:]
         sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
 
-        return log_p_raw, mu, sigma_inv, latents
+        return log_p, mu, sigma_inv, latents
 
 
 class MixtureModel(torch.nn.Module):
