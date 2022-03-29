@@ -132,7 +132,7 @@ class TimeSeriesFeatures(torch.nn.Module):
         self.combine_exogenous = torch.nn.Sequential(
             torch.nn.Linear(
                 feature_dimension + exogenous_dimension,
-                feature_dimension + exogenous_dimension,
+                feature_dimension,
             ),
             activation,
         )
@@ -205,12 +205,10 @@ class UnivariateMixture64(torch.nn.Module):
             use_batch_norm=use_batch_norm,
         )
 
-        self.p_output = torch.nn.Linear(
-            feature_dimension + exogenous_dimension, mixture_components
-        )
+        self.p_output = torch.nn.Linear(feature_dimension, mixture_components)
 
         self.mu_output = torch.nn.ConvTranspose1d(
-            feature_dimension + exogenous_dimension, mixture_components, input_channels
+            feature_dimension, mixture_components, input_channels
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -218,7 +216,7 @@ class UnivariateMixture64(torch.nn.Module):
         # square covariance matrix of the same dimension as the
         # output.
         self.sigma_inv_output = torch.nn.ConvTranspose2d(
-            feature_dimension + exogenous_dimension,
+            feature_dimension,
             mixture_components,
             (input_channels, input_channels),
         )
