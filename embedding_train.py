@@ -25,7 +25,7 @@ EPOCHS = 30000
 EMBEDDING_DIMENSION = 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
-MIXTURE_COMPONENTS = 4
+MIXTURE_COMPONENTS = 3  # Was 4
 DROPOUT_P = 0.50
 BETA1 = 0.95
 BETA2 = 0.999
@@ -65,7 +65,7 @@ logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 def get_model(context_size=64, model_file=None):
     if context_size == 64:
-        default_network_class = network.UnivariateMixture64
+        default_network_class = network.MixtureModel
     else:
         raise Exception(f"No network for context of size {context_size}")
 

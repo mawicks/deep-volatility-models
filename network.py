@@ -6,13 +6,12 @@ import torch.nn
 DEFAULT_MIXTURE_FEATURES = 20  # May be overrideen by caller
 DEFAULT_MIXTURE_COMPONENTS = 4  # May be overridden by caller
 
-DEFAULT_GAUSSIAN_NOISE = 0.0025  # 0.003  # 0.004
+DEFAULT_GAUSSIAN_NOISE = 0.0025
 DEFAULT_DROPOUT_P = 0.125
 DEFAULT_BATCH_EPS = 1e-4
 
 MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
 SIGMA_INV_CLAMP = 1000.0
-NEW_PROBABILITY_WEIGHT = 0.1
 
 softmax = torch.nn.Softmax(dim=1)
 relu = torch.nn.ReLU()
@@ -81,7 +80,7 @@ class TimeSeriesFeatures(torch.nn.Module):
 
     @property
     def window_size(self):
-        return (self.window_size,)
+        return self._window_size
 
     def __init__(
         self,
@@ -103,7 +102,7 @@ class TimeSeriesFeatures(torch.nn.Module):
             GaussianNoise(gaussian_noise),
         ]
 
-        def block(input_channels, width):
+        def conv_block(input_channels, width):
             return [
                 torch.nn.Conv1d(
                     input_channels, feature_dimension, width, stride=width, padding=0
@@ -113,11 +112,11 @@ class TimeSeriesFeatures(torch.nn.Module):
                 torch.nn.Dropout2d(p=dropout),
             ]
 
-        layers.extend(block(input_channels, 4))
+        layers.extend(conv_block(input_channels, 4))
         window_size //= 4
 
         while window_size > 1:
-            layers.extend(block(feature_dimension, 4))
+            layers.extend(conv_block(feature_dimension, 4))
             window_size //= 4
 
         if window_size != 1:
@@ -125,11 +124,11 @@ class TimeSeriesFeatures(torch.nn.Module):
         # Should have one "pixel" with a depth of feature_dimension
 
         # Do one more mixing layer.
-        layers.extend(block(feature_dimension, 1))
+        layers.extend(conv_block(feature_dimension, 1))
 
         self.convolutional_layers = torch.nn.Sequential(*layers)
 
-        self.combine_exogenous = torch.nn.Sequential(
+        self.blend_exogenous = torch.nn.Sequential(
             torch.nn.Linear(
                 feature_dimension + exogenous_dimension,
                 feature_dimension,
@@ -149,26 +148,28 @@ class TimeSeriesFeatures(torch.nn.Module):
 
         # The dimension of `time_series_features`` is (batch,
         # feature_dimensions, 1).  We'll adopt the convention that this network
-        # produces a flattened feature vector (not a series), so we remove the
-        # last dimension.  In some cases caller may want to add it back if
-        # additional convolutional processing is necessary.  Also, this makes
-        # the dimension conform with the exogenous inputs (which the output will
-        # be combined with), which do not have this extra dimension.
+        # produces a flattened feature vector (i.e., not a series), so we remove
+        # the last dimension.  In some cases, the caller may want to add it back
+        # when additional convolutional processing is useful.  Also, removing
+        # the final dimension makes its dimension conform with the exogenous
+        # inputs (which `time_series_features` will be combined with), which do
+        # not have this extra dimension.
 
         time_series_features = time_series_features.squeeze(2)
 
-        # Concatenate time series feature vector with exogenous features
-        # and allow them to interact with another layer
+        # Concatenate time series feature vector with exogenous features (if
+        # provided) and add another mixing layer to allow them to interact
+
         if exogenous is not None:
             output = torch.cat((time_series_features, exogenous), dim=1)
-            output = self.combine_exogenous(output)
+            output = self.blend_exogenous(output)
         else:
             output = time_series_features
 
         return output
 
 
-class UnivariateMixture64(torch.nn.Module):
+class MultivariateHead(torch.nn.Module):
     """
     Arguments:
        context (tensor of dim 64)
@@ -178,37 +179,22 @@ class UnivariateMixture64(torch.nn.Module):
        log odds of prediction (tensor of dim 1)
     """
 
-    @property
-    def context_size(self):
-        return 64
-
     def __init__(
         self,
         input_channels,
+        output_channels=None,
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
         mixture_components=DEFAULT_MIXTURE_COMPONENTS,
-        exogenous_dimension=0,
-        gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
-        activation=relu,
-        dropout=DEFAULT_DROPOUT_P,
-        use_batch_norm=True,
     ):
         super().__init__()
 
-        self.time_series_features = TimeSeriesFeatures(
-            input_channels,
-            64,
-            feature_dimension=feature_dimension,
-            exogenous_dimension=exogenous_dimension,
-            gaussian_noise=gaussian_noise,
-            dropout=dropout,
-            use_batch_norm=use_batch_norm,
-        )
+        if output_channels is None:
+            output_channels = input_channels
 
         self.p_output = torch.nn.Linear(feature_dimension, mixture_components)
 
         self.mu_output = torch.nn.ConvTranspose1d(
-            feature_dimension, mixture_components, input_channels
+            feature_dimension, mixture_components, output_channels
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -218,7 +204,7 @@ class UnivariateMixture64(torch.nn.Module):
         self.sigma_inv_output = torch.nn.ConvTranspose2d(
             feature_dimension,
             mixture_components,
-            (input_channels, input_channels),
+            (output_channels, input_channels),
         )
 
     def __dimensions(self):
@@ -227,7 +213,7 @@ class UnivariateMixture64(torch.nn.Module):
         output_channels, input_channels = self.sigma_inv_output.kernel_size
         return features_dimension, components, output_channels, input_channels
 
-    def forward(self, context, embedding=None):
+    def forward(self, latents):
         """
         Argument:
            context: (minibatch_size, channels, 64)
@@ -240,9 +226,6 @@ class UnivariateMixture64(torch.nn.Module):
            softmax to it to produce probabilities.
 
         """
-        # Get a "flat" feature vector for the series.
-        latents = self.time_series_features(context, embedding)
-
         log_p_raw = self.p_output(latents)
 
         # The network for mu uses a 1d one-pixel de-convolutional layer which
@@ -269,7 +252,7 @@ class UnivariateMixture64(torch.nn.Module):
         return log_p_raw, mu, sigma_inv, latents
 
 
-class MultivariateMixture64(torch.nn.Module):
+class MixtureModel(torch.nn.Module):
     """
     Arguments:
        context (tensor of dim 64)
@@ -286,10 +269,11 @@ class MultivariateMixture64(torch.nn.Module):
     def __init__(
         self,
         input_channels,
+        output_head_type=MultivariateHead,
         output_channels=None,
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
         mixture_components=DEFAULT_MIXTURE_COMPONENTS,
-        embedding_dimension=0,
+        exogenous_dimension=0,
         gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
         dropout=DEFAULT_DROPOUT_P,
@@ -300,73 +284,30 @@ class MultivariateMixture64(torch.nn.Module):
         if output_channels is None:
             output_channels = input_channels
 
-        self.limiter = MinMaxClamping()
-        self.noise = GaussianNoise(gaussian_noise)
-        self.context_pipeline = torch.nn.Sequential(
-            # Assume content has 64 elements
-            self.limiter,
-            self.noise,
-            torch.nn.Conv1d(input_channels, feature_dimension, 4, stride=4, padding=0),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # channel shape is (feature_dimension, 16)
-            torch.nn.Conv1d(
-                feature_dimension, feature_dimension, 4, stride=4, padding=0
-            ),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # channel shape is (feature_dimension, 4)
-            torch.nn.Conv1d(feature_dimension, feature_dimension, 4),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout),
-            # Now have feature_dimension in a single slot
-            # Do one more mixing layer.
-            torch.nn.Conv1d(feature_dimension, feature_dimension, 1),
-            batch_norm_factory_1d(feature_dimension, use_batch_norm),
-            activation,
-            torch.nn.Dropout2d(p=dropout)
-            # Should have one channel of depth feature_dimension
+        self.time_series_features = TimeSeriesFeatures(
+            input_channels,
+            64,
+            feature_dimension=feature_dimension,
+            exogenous_dimension=exogenous_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
         )
 
-        self.latent_pipeline = torch.nn.Sequential(
-            torch.nn.Linear(
-                feature_dimension + embedding_dimension,
-                feature_dimension + embedding_dimension,
-            ),
-            activation,
+        self.head = output_head_type(
+            input_channels,
+            output_channels=output_channels,
+            feature_dimension=feature_dimension,
+            mixture_components=mixture_components,
         )
 
-        self.mu_output = torch.nn.ConvTranspose1d(
-            feature_dimension + embedding_dimension, mixture_components, output_channels
-        )
-        self.p_output = torch.nn.Conv1d(
-            feature_dimension + embedding_dimension, mixture_components, 1
-        )
-        # It seems odd here to use "channels" as the matrix dimension,
-        # but that's exactly what we want.  The number of input
-        # channels is the number of time series.  Here we want a
-        # square covariance matrix of the same dimension as the
-        # output.
-        self.sigma_inv_output = torch.nn.ConvTranspose2d(
-            feature_dimension + embedding_dimension,
-            mixture_components,
-            (output_channels, input_channels),
-        )
-
-    def dimensions(self):
+    def __dimensions(self):
         features_dimension = self.sigma_inv_output.in_channels
         components = self.sigma_inv_output.out_channels
         output_channels, input_channels = self.sigma_inv_output.kernel_size
         return features_dimension, components, output_channels, input_channels
 
-    def just_latents(self, context):
-        latents = self.context_pipeline(context)
-        return latents
-
-    def forward(self, context, embedding=None, return_latents=False, debug=False):
+    def forward(self, context, embedding=None):
         """
         Argument:
            context: (minibatch_size, channels, 64)
@@ -379,47 +320,13 @@ class MultivariateMixture64(torch.nn.Module):
            softmax to it to produce probabilities.
 
         """
-        # Run through context pipeline squeeze to flatten
-        latents = self.just_latents(context)
+        # Get a "flat" feature vector for the series.
+        latents = self.time_series_features(context, embedding)
 
-        if embedding is not None:
-            latents = torch.cat((latents, embedding.unsqueeze(2)), dim=1)
-
-        # This check keeps this code backward compatible with
-        # pre-existing model files that don't have embedding and don't have
-        # latent_pipeline attributes.  We also need to presever
-        # the channel dimension for backward compatibility where
-        # the channel indicates the stock for multivariate portfolios.
-        # Latents are only used for single symbols, so we remove the chennel,
-        # apply another layer, and then restore the channel because the output
-        # layers expect a channel.
-
-        if hasattr(self, "latent_pipeline"):
-            latents = self.latent_pipeline(latents.squeeze(2)).unsqueeze(2)
-
-        mu = self.mu_output(latents)
-        log_p_raw = self.p_output(latents).squeeze(2)
-
-        # Because we're using ConvTranspose2d to construct a
-        # covariance matrix, here we convince ConvTranspose2d
-        # that the input is 2D by adding a dimension using unsqueeze.
-        sigma_inv = self.sigma_inv_output(latents.unsqueeze(3))
-
-        # FIXME:  For compatibility with previously saved models
-        # we get the shape from sigma_inv rather than from object state.
-        output_channels, input_channels = sigma_inv.shape[2:]
-        sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
+        log_p_raw, mu, sigma_inv, latents = self.head(latents)
 
         if not self.training:
             mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
             sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
-        if debug:
-            print("latents: ", latents)
-            print("log_p_raw", log_p_raw)
-            print("sigma_inv", sigma_inv)
-
-        if return_latents:
-            return log_p_raw, mu, sigma_inv, latents
-        else:
-            return log_p_raw, mu, sigma_inv
+        return log_p_raw, mu, sigma_inv, latents
