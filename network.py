@@ -169,14 +169,9 @@ class TimeSeriesFeatures(torch.nn.Module):
         return output
 
 
-class MultivariateHead(torch.nn.Module):
+class UnivariateHead(torch.nn.Module):
     """
-    Arguments:
-       context (tensor of dim 64)
-       value (tensor of dim 1)
-
-    Returns:
-       log odds of prediction (tensor of dim 1)
+    TODO
     """
 
     def __init__(
@@ -191,9 +186,65 @@ class MultivariateHead(torch.nn.Module):
         if output_channels is None:
             output_channels = input_channels
 
-        self.p_output = torch.nn.Linear(feature_dimension, mixture_components)
+        if input_channels != 1 or output_channels != 1:
+            raise ValueError(
+                "UnivariateHead requires input_channels == output_channels == 1"
+            )
 
-        self.mu_output = torch.nn.ConvTranspose1d(
+        self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
+        self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
+        self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)
+
+    def __dimensions(self):
+        features_dimension = self.sigma_inv_head.in_channels
+        components = self.sigma_inv_head.out_channels
+        output_channels = input_channels = 1
+        return features_dimension, components, output_channels, input_channels
+
+    def forward(self, latents):
+        """
+        Argument:
+           latents: (minibatch_size, feature_dimension)
+        Returns:
+           log_p_raw: (minibatch_size, components)
+           mu: (minibatch_size, components, output_symbols)
+           sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
+        Notes:
+           log_p_raw is "raw" in the sense in that the caller must apply a
+           softmax to it to produce probabilities.
+
+        """
+        # The unsqueeze() calls are required to maintain dimensions that comform
+        # with the multivarate case.  In the multivate case, mu is a vector
+        # (with dimension equal to the number of symbols) and sigma_inv is a
+        # matrix (with row and colum dimensions equal to the number of symbols)
+        log_p_raw = self.p_head(latents)
+        mu = self.mu_head(latents).unsqueeze(2)
+        sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
+
+        return log_p_raw, mu, sigma_inv, latents
+
+
+class MultivariateHead(torch.nn.Module):
+    """
+    TODO
+    """
+
+    def __init__(
+        self,
+        input_channels,
+        output_channels=None,
+        feature_dimension=DEFAULT_MIXTURE_FEATURES,
+        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+    ):
+        super().__init__()
+
+        if output_channels is None:
+            output_channels = input_channels
+
+        self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
+
+        self.mu_head = torch.nn.ConvTranspose1d(
             feature_dimension, mixture_components, output_channels
         )
         # It seems odd here to use "channels" as the matrix dimension,
@@ -201,7 +252,7 @@ class MultivariateHead(torch.nn.Module):
         # channels is the number of time series.  Here we want a
         # square covariance matrix of the same dimension as the
         # output.
-        self.sigma_inv_output = torch.nn.ConvTranspose2d(
+        self.sigma_inv_head = torch.nn.ConvTranspose2d(
             feature_dimension,
             mixture_components,
             (output_channels, input_channels),
@@ -216,38 +267,34 @@ class MultivariateHead(torch.nn.Module):
     def forward(self, latents):
         """
         Argument:
-           context: (minibatch_size, channels, 64)
+           latents: (minibatch_size, feature_dimension)
         Returns:
            log_p_raw: (minibatch_size, components)
-           mu: (minibatch_size, components, channels)
-           sigma_inv: (minibatch_size, components, channels, channels)
+           mu: (minibatch_size, components, output_symbols)
+           sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
         Notes:
            log_p_raw is "raw" in the sense in that the caller must apply a
            softmax to it to produce probabilities.
 
         """
-        log_p_raw = self.p_output(latents)
+        log_p_raw = self.p_head(latents)
 
         # The network for mu uses a 1d one-pixel de-convolutional layer which
         # require the input to be sequence-like.  Create an artificial sequence
         # dimension before calling.
         latents_1d = latents.unsqueeze(2)
-        mu = self.mu_output(latents_1d)
+        mu = self.mu_head(latents_1d)
 
         # The network for sigma_inv uses a 2d one-pixel de-convolutional layer
         # which requires the input to be image-like.  Create artificial x and y
         # dimensions before calling.
         latents_2d = latents_1d.unsqueeze(3)
-        sigma_inv = self.sigma_inv_output(latents_2d)
+        sigma_inv = self.sigma_inv_head(latents_2d)
 
         # FIXME:  For compatibility with previously saved models
         # we get the shape from sigma_inv rather than from object state.
         output_channels, input_channels = sigma_inv.shape[2:]
         sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
-
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
         return log_p_raw, mu, sigma_inv, latents
 
@@ -269,8 +316,8 @@ class MixtureModel(torch.nn.Module):
     def __init__(
         self,
         input_channels,
-        output_head_type=MultivariateHead,
         output_channels=None,
+        output_head_type=UnivariateHead,
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
         mixture_components=DEFAULT_MIXTURE_COMPONENTS,
         exogenous_dimension=0,
