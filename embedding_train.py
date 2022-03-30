@@ -22,6 +22,7 @@ TRAIN_FRACTION = 0.80
 SEED = 24  # 42
 
 EPOCHS = 30000
+DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
@@ -63,11 +64,8 @@ sigmoid = torch.nn.Sigmoid()
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 
-def get_model(context_size=64, model_file=None):
-    if context_size == 64:
-        default_network_class = network.MixtureModel
-    else:
-        raise Exception(f"No network for context of size {context_size}")
+def get_model(window_size=DEFAULT_WINDOW_SIZE, model_file=None):
+    default_network_class = network.MixtureModel
 
     try:
         model = torch.load(model_file)
@@ -76,6 +74,7 @@ def get_model(context_size=64, model_file=None):
 
     except Exception:
         n_network = default_network_class(
+            window_size,
             1,
             feature_dimension=FEATURE_DIMENSION,
             mixture_components=MIXTURE_COMPONENTS,
@@ -128,7 +127,7 @@ class SymbolDataset(torch.utils.data.Dataset):
     show_default=True,
     help="Train only the embeddings",
 )
-@click.option("--context", default=64, type=int)
+@click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
 def main(
     project,
     model_file,
@@ -136,7 +135,7 @@ def main(
     refresh,
     tune_embeddings,
     just_embeddings,
-    context,
+    window_size,
 ):
     # Rewrite symbosl in `symbol` with uppercase versions
     symbol = list(map(str.upper, symbol))
@@ -144,12 +143,12 @@ def main(
     print("model_file: ", model_file)
     print("symbol: ", symbol)
     print("refresh: ", refresh)
-    print("context: ", context)
+    print("context: ", window_size)
 
     print(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
-    n_network, parameters = get_model(context_size=context, model_file=model_file)
+    n_network, parameters = get_model(window_size=window_size, model_file=model_file)
     n_network = n_network.to(device)
 
     embeddings = torch.nn.Embedding(len(symbol), EMBEDDING_DIMENSION)
@@ -234,15 +233,15 @@ def main(
     for e in range(EPOCHS):
         epoch_losses = []
 
-        for minibatch, (symbol_encoding, context, true_values) in enumerate(
+        for minibatch, (symbol_encoding, window_size, true_values) in enumerate(
             training_dataloader
         ):
-            context = context.to(device)
+            window_size = window_size.to(device)
             symbol_encoding = symbol_encoding.to(device)
             true_values = true_values.to(device)
 
             symbol_embedding = embeddings(symbol_encoding)
-            log_p, mu, inv_sigma = n_network(context, symbol_embedding)[:3]
+            log_p, mu, inv_sigma = n_network(window_size, symbol_embedding)[:3]
 
             mb_size, components, channels = mu.shape
             combined_mu = torch.sum(
@@ -320,15 +319,17 @@ def main(
                 # Use the model in eval() mode.
                 network_copy = copy.deepcopy(n_network).eval()
 
-                for minibatch, (symbol_encoding, context, true_values) in enumerate(
+                for minibatch, (symbol_encoding, window_size, true_values) in enumerate(
                     test_dataloader
                 ):
-                    context = context.to(device)
+                    window_size = window_size.to(device)
                     true_values = true_values.to(device)
                     symbol_encoding = symbol_encoding.to(device)
 
                     symbol_embedding = embeddings(symbol_encoding)
-                    log_p, mu, inv_sigma = network_copy(context, symbol_embedding)[:3]
+                    log_p, mu, inv_sigma = network_copy(window_size, symbol_embedding)[
+                        :3
+                    ]
 
                     mb_size, components, channels = mu.shape
                     combined_mu = torch.sum(

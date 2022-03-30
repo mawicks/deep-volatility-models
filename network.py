@@ -86,6 +86,10 @@ class TimeSeriesFeatures(torch.nn.Module):
     def window_size(self):
         return self._window_size
 
+    @property
+    def feature_dimension(self):
+        return self._feature_dimension
+
     def __init__(
         self,
         input_channels: int,
@@ -100,45 +104,71 @@ class TimeSeriesFeatures(torch.nn.Module):
         super().__init__()
 
         self.__setattr__("_window_size", window_size)
-
-        layers = [
-            MinMaxClamping(),
-            GaussianNoise(gaussian_noise),
-        ]
+        self.__setattr__("_feature_dimension", feature_dimension)
 
         def conv_block(input_channels, width):
             return [
                 torch.nn.Conv1d(
-                    input_channels, feature_dimension, width, stride=width, padding=0
+                    input_channels,
+                    feature_dimension,
+                    width,
+                    stride=width,
+                    padding=0,
                 ),
                 batch_norm_factory_1d(feature_dimension, use_batch_norm),
                 activation,
                 torch.nn.Dropout2d(p=dropout),
             ]
 
-        layers.extend(conv_block(input_channels, 4))
-        window_size //= 4
+        layers = []
+        # If window_size is 0 (which we allow), we leave the sequential block empty.
+        if window_size > 0:
+            layers.extend(
+                [
+                    MinMaxClamping(),
+                    GaussianNoise(gaussian_noise),
+                ]
+            )
 
-        while window_size > 1:
-            layers.extend(conv_block(feature_dimension, 4))
+            layers.extend(conv_block(input_channels, 4))
             window_size //= 4
 
-        if window_size != 1:
-            raise ValueError("window_size must be a power of 4")
-        # Should have one "pixel" with a depth of feature_dimension
+            while window_size > 1:
+                layers.extend(conv_block(feature_dimension, 4))
+                window_size //= 4
 
-        # Do one more mixing layer.
-        layers.extend(conv_block(feature_dimension, 1))
+            if window_size != 1:
+                raise ValueError("window_size must be a power of 4")
+            # Should have one "pixel" with a depth of feature_dimension
+
+            # Do one more mixing layer.
+            layers.extend(conv_block(feature_dimension, 1))
 
         self.convolutional_layers = torch.nn.Sequential(*layers)
 
-        self.blend_exogenous = torch.nn.Sequential(
+        blend_exogenous_layers = [
             torch.nn.Linear(
                 feature_dimension + exogenous_dimension,
                 feature_dimension,
             ),
+            batch_norm_factory_1d(feature_dimension, use_batch_norm),
             activation,
-        )
+            torch.nn.Dropout(dropout),
+        ]
+        for _ in range(1):
+            blend_exogenous_layers.extend(
+                [
+                    torch.nn.Linear(
+                        feature_dimension,
+                        feature_dimension,
+                    ),
+                    batch_norm_factory_1d(feature_dimension, use_batch_norm),
+                    activation,
+                    torch.nn.Dropout(dropout),
+                ]
+            )
+
+        self.blend_exogenous = torch.nn.Sequential(*blend_exogenous_layers)
 
     def forward(self, window, exogenous=None):
         """
@@ -147,19 +177,25 @@ class TimeSeriesFeatures(torch.nn.Module):
         Returns:
            latents - (minibatch_size, feature_dimension)
         """
+        batch_size = window.shape[0]
 
-        time_series_features = self.convolutional_layers(window)
+        if self.window_size > 0:
+            time_series_features = self.convolutional_layers(window)
 
-        # The dimension of `time_series_features`` is (batch,
-        # feature_dimensions, 1).  We'll adopt the convention that this network
-        # produces a flattened feature vector (i.e., not a series), so we remove
-        # the last dimension.  In some cases, the caller may want to add it back
-        # when additional convolutional processing is useful.  Also, removing
-        # the final dimension makes its dimension conform with the exogenous
-        # inputs (which `time_series_features` will be combined with), which do
-        # not have this extra dimension.
+            # The dimension of `time_series_features`` is (batch,
+            # feature_dimensions, 1).  We'll adopt the convention that this network
+            # produces a flattened feature vector (i.e., not a series), so we remove
+            # the last dimension.  In some cases, the caller may want to add it back
+            # when additional convolutional processing is useful.  Also, removing
+            # the final dimension makes its dimension conform with the exogenous
+            # inputs (which `time_series_features` will be combined with), which do
+            # not have this extra dimension.
 
-        time_series_features = time_series_features.squeeze(2)
+            time_series_features = time_series_features.squeeze(2)
+        else:
+            # window should be empty (size 0), so we can reshape it to another
+            # empty tensor with the correct dimensions so that the cat below works.
+            time_series_features = window.reshape((batch_size, self.feature_dimension))
 
         # Concatenate time series feature vector with exogenous features (if
         # provided) and add another mixing layer to allow them to interact
@@ -298,21 +334,15 @@ class MultivariateHead(torch.nn.Module):
 
 
 class MixtureModel(torch.nn.Module):
-    """
-    Arguments:
-       context (tensor of dim 64)
-       value (tensor of dim 1)
-
-    Returns:
-       log odds of prediction (tensor of dim 1)
-    """
+    """ """
 
     @property
     def context_size(self):
-        return 64
+        return self.time_series_features.window_size
 
     def __init__(
         self,
+        window_size,
         input_channels,
         output_channels=None,
         output_head_type=UnivariateHead,
@@ -331,7 +361,7 @@ class MixtureModel(torch.nn.Module):
 
         self.time_series_features = TimeSeriesFeatures(
             input_channels,
-            64,
+            window_size,
             feature_dimension=feature_dimension,
             exogenous_dimension=exogenous_dimension,
             gaussian_noise=gaussian_noise,
@@ -355,7 +385,7 @@ class MixtureModel(torch.nn.Module):
     def forward(self, context, embedding=None):
         """
         Argument:
-           context: (minibatch_size, channels, 64)
+           context: (minibatch_size, channels, window_size)
         Returns:
            log_p_raw: (minibatch_size, components)
            mu: (minibatch_size, components, channels)
