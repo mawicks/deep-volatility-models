@@ -4,6 +4,32 @@ import torch
 import torch.utils.data
 
 
+def multivariate_stats(x):
+    """
+    Given a time series x, estimate the mean (mu) and the square root of
+    the covariance (sigma) for that time series.
+    Inputs:
+      x (tensor(mb_size, channels)): values
+    Outputs:
+      mu (tensor(channels)): channel means
+      sigma (tensor(channels, channels)): cholesky factor of cov matrix
+    """
+    mb_size, channels = x.shape
+    mu = torch.mean(x, dim=0)
+    error = x - mu.unsqueeze(0).expand((mb_size, channels))
+    # error is mb_size x channels
+    error1 = error.unsqueeze(2)
+    # error1 represents e (mb_size, channels, 1)
+    error2 = error.unsqueeze(1)
+    # error2 represents e^T (mb_size, 1, channels)
+    cov = torch.mean(torch.matmul(error1, error2), dim=0)
+    # cov is (channels, channels)
+
+    # Return cholesky factor
+    sigma = torch.cholesky(cov)
+    return mu, sigma
+
+
 class RollingWindowSeries(torch.utils.data.Dataset):
     """
     Given a time series, construct a sequence of rolling windows on the series.

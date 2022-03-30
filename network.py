@@ -1,4 +1,3 @@
-from this import d
 from matplotlib import use
 import torch.nn
 
@@ -31,6 +30,10 @@ def batch_norm_factory_1d(feature_dimension, use_batch_norm):
 
 
 class MinMaxClamping(torch.nn.Module):
+    """
+    TODO
+    """
+
     def __init__(self):
         super().__init__()
         self.training_max = None
@@ -96,7 +99,7 @@ class TimeSeriesFeatures(torch.nn.Module):
     ):
         super().__init__()
 
-        self._window_size = window_size
+        self.__setattr__("_window_size", window_size)
 
         layers = [
             MinMaxClamping(),
