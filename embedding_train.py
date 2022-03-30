@@ -13,7 +13,7 @@ import yfinance as yf
 # Local imports
 import data_sources
 import history
-import loss_functions
+import mixture_model_stats
 import time_series
 import models
 import network
@@ -260,7 +260,7 @@ def main(
             bias_error = torch.mean(mean_error ** 2)
 
             loss = -torch.mean(
-                loss_functions.multivariate_mixture_log_likelihood(
+                mixture_model_stats.multivariate_log_likelihood(
                     true_values.squeeze(2), log_p, mu, inv_sigma
                 )
             )
@@ -351,7 +351,7 @@ def main(
                     bias_error = torch.mean(mean_error ** 2)
 
                     log_loss = -torch.mean(
-                        loss_functions.multivariate_mixture_log_likelihood(
+                        mixture_model_stats.multivariate_log_likelihood(
                             true_values.squeeze(2), log_p, mu, inv_sigma
                         )
                     )
