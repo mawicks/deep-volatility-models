@@ -50,8 +50,11 @@ def univariate_log_likelihood(x, log_p, mu, sigma_inv):
     mu = mu.squeeze(2)
     sigma_inv = sigma_inv.squeeze(3).squeeze(2)
 
-    mb_size = x.shape[0]
-    if x.shape[0] != mb_size or mu.shape != log_p.shape or mu.shape != sigma_inv.shape:
+    if (
+        x.shape[0] != mu.shape[0]
+        or mu.shape != log_p.shape
+        or mu.shape != sigma_inv.shape
+    ):
         raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
 
     # Subtract mu from x in each component.
@@ -148,17 +151,22 @@ def univariate_combine_metrics(p, mu, sigma_inv):
     Note:  This assumes a univariate mu and sigma_inv.
 
     Inputs:
-        p (tensor(mb_size, mixture_componente)):
-           probability of each component
-        mu (tensor(mb_size, mixture_components, symbols): mu for each component
-        sigma_inv (tensor(mb_size, mixture_components, symbols, symbols): sigma for each component
+        p: tensor of shape (mb_size, mixture_componente): probability of each component
+        mu: tensor of shape (mb_size, mixture_components, 1): mu for each
+            component.
+        sigma_inv: tensor of shape (mb_size, mixture_components, 1) containing
+        the inverse of the standard deviation of each component.
 
     Outputs:
-        return (tensor(mb_size)): expected return
-        std_dev (tensor(mb_size, symbols, symbols)): std deviations (sqrt of covariance matrix)
+        mu: tensor of shape (mb_size,) containing the expected mean
+        std_dev: tensor of shape (mb_size, 1, 1) containing the
+            stanrdard deviation of the mixture.
+
+        Note tha the return value is the standard deviation and not the inverse
+        of the standard deviation.
     """
 
-    mb_size, mixture_components, symbols = mu.shape
+    symbols = mu.shape[2]
     if symbols != 1:
         raise ValueError("This code requires the number of symbols to be 1")
 
