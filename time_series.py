@@ -9,11 +9,18 @@ def multivariate_stats(x):
     Given a time series x, estimate the mean (mu) and the square root of
     the covariance (sigma) for that time series.
     Inputs:
-      x (tensor(mb_size, channels)): values
+      x: tensor of shape (tensor(mb_size, channels)) containing the sequence values
     Outputs:
-      mu (tensor(channels)): channel means
-      sigma (tensor(channels, channels)): cholesky factor of cov matrix
+      mu: tensor of shape: (channels,) containing the mean estimates
+      sigma: tensor of shape: ((channels, channels) containing an estimate of
+      the lower Cholesky factor of the covariance matrix.
+
+      TODO: To improve numerical stability, Use an SVD to compute the Cholesky
+      factor rather than the naive formula.
     """
+    # Create tensor version of x in case it wasn't
+    x = torch.tensor(x)
+
     mb_size, channels = x.shape
     mu = torch.mean(x, dim=0)
     error = x - mu.unsqueeze(0).expand((mb_size, channels))
@@ -26,7 +33,7 @@ def multivariate_stats(x):
     # cov is (channels, channels)
 
     # Return cholesky factor
-    sigma = torch.cholesky(cov)
+    sigma = torch.linalg.cholesky(cov)
     return mu, sigma
 
 

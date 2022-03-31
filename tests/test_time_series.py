@@ -7,6 +7,86 @@ import torch
 import time_series
 
 
+"""
+The test cases for multivariate_stats() was generated as follows:
+
+Assume x = L*z + b has zero mean and covariance = I
+
+Now E[x] = b
+C_x = E[xx’] = E[L (zz’) L’] = LL’
+Where L is a lower triangular matrix.
+
+We can use this to generate series of x with a specific L and b.
+For example, let b = [1, 2]
+let L = [1, 0],  [-1; 2]]
+
+We need to choose values for z with zero mean and C = I
+
+One possibility is
+Z = [[1, 1], [1, -1], [-1, 1], [-1, -1]]
+
+Where each row is a (z1, z2) pair.
+
+Because “time” is the row dimension of Z, we need to transpose the original 
+equation to be:
+
+x = ZL’ + b’
+
+where Z is as above,  L=[[1, 0], [-1, 2]], 
+and b’ = [[1, 2], [1, 2], [1, 2], [1, 2]]
+
+>>> l = np.array([[1, 0], [-1, 2]])
+>>> l
+array([[ 1,  0],
+       [-1,  2]])
+>>> z=np.array([[1, 1], [1, -1], [-1, 1], [-1, -1]])
+>>> z
+array([[ 1,  1],
+       [ 1, -1],
+       [-1,  1],
+       [-1, -1]])
+>>> b=np.array([[1, 2], [1, 2], [1, 2], [1, 2]])
+>>> b
+array([[1, 2],
+       [1, 2],
+       [1, 2],
+       [1, 2]])
+
+>>> np.matmul(z, l.T) + b
+array([[ 2,  3],
+            [ 2, -1],
+            [ 0,  5],
+            [ 0,  1]])
+>>> 
+
+"""
+
+
+@pytest.mark.parametrize(
+    "series, mu_expected, l_expected",
+    [
+        (
+            [[2.0, 3.0], [2.0, -1.0], [0.0, 5.0], [0.0, 1.0]],
+            torch.tensor([1, 2], dtype=torch.float),
+            torch.tensor([[1.0, 0.0], [-1.0, 2.0]]),
+        ),
+    ],
+)
+def test_multivariate_stats(series, mu_expected, l_expected):
+    mu, l = time_series.multivariate_stats(series)
+    assert mu.shape == mu_expected.shape
+    assert l.shape == l_expected.shape
+    print(f"mu returned:\n{mu}")
+    print(f"mu expected:\n{mu_expected}")
+    print(f"\nl returned:\n{l}")
+    print(f"l expected:\n{l_expected}")
+
+    # Fortunately the test case is compute *exactly* so no approximate
+    # comparisons are necessary.
+    assert (mu == mu_expected).all()
+    assert (l == l_expected).all()
+
+
 def test_rolling_window_arg_check():
     with pytest.raises(ValueError):
         time_series.RollingWindowSeries(range(10), 3, stride=0)

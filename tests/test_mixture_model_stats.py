@@ -82,3 +82,40 @@ def test_multivariate_likelihood_cases(x, log_p, mu, sigma_inv, expected):
 
     log_loss = mixture_model_stats.univariate_log_likelihood(x, log_p, mu, sigma_inv)
     assert float(log_loss) == pytest.approx(expected, EPS)
+
+
+def test_univeriate_fails_on_multivariate_input():
+    mb_size, mixture_components, symbols = (5, 3, 2)
+
+    x = torch.randn(mb_size, symbols)
+    log_p = torch.randn(mb_size, mixture_components)
+    mu = torch.randn(mb_size, mixture_components, symbols)
+    sigma_inv = torch.randn(mb_size, mixture_components, symbols, symbols)
+
+    # As a sanity check that the dimensions are correct except for being
+    # multi-variate, a ccall to
+    # mixture_model_state.multivariate_log_likelihood() should return
+    # *something*:
+
+    mixture_model_stats.multivariate_log_likelihood(x, log_p, mu, sigma_inv)
+
+    with pytest.raises(ValueError):
+        log_loss = mixture_model_stats.univariate_log_likelihood(
+            x, log_p, mu, sigma_inv
+        )
+
+
+def test_univeriate_fails_on_inconsistent_dimensions():
+
+    mb_size, mixture_components, symbols = (5, 3, 1)
+
+    x = torch.randn(mb_size, symbols)
+    log_p = torch.randn(mb_size, mixture_components)
+    # Introduce an incompatible dimension
+    mu = torch.randn(mb_size, mixture_components + 1, symbols)
+    sigma_inv = torch.randn(mb_size, mixture_components, symbols, symbols)
+
+    with pytest.raises(ValueError):
+        log_loss = mixture_model_stats.univariate_log_likelihood(
+            x, log_p, mu, sigma_inv
+        )
