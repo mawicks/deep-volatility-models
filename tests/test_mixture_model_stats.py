@@ -105,7 +105,7 @@ def test_univeriate_fails_on_multivariate_input():
         )
 
 
-def test_univeriate_fails_on_inconsistent_dimensions():
+def test_fail_on_inconsistent_dimensions():
 
     mb_size, mixture_components, symbols = (5, 3, 1)
 
@@ -116,6 +116,17 @@ def test_univeriate_fails_on_inconsistent_dimensions():
     sigma_inv = torch.randn(mb_size, mixture_components, symbols, symbols)
 
     with pytest.raises(ValueError):
-        log_loss = mixture_model_stats.univariate_log_likelihood(
-            x, log_p, mu, sigma_inv
-        )
+        mixture_model_stats.univariate_log_likelihood(x, log_p, mu, sigma_inv)
+
+    with pytest.raises(ValueError):
+        mixture_model_stats.multivariate_log_likelihood(x, log_p, mu, sigma_inv)
+
+
+@pytest.mark.parametrize(
+    "p, mu, sigma_inv, expected_mean, expected_std_dev",
+    [],
+)
+def test_univariate_combine_metrics(p, mu, sigma_inv, expected_mean, expected_std_dev):
+    mean, std_dev = mixture_model_stats.univariate_combine_metrics(p, mu, sigma_inv)
+    assert mean == expected_mean
+    assert std_dev == expected_std_dev

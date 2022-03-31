@@ -11,7 +11,9 @@ EPS_FOR_SINGULARITY = 1e-4
 # TODO: Write a test for this
 
 
-def univariate_log_likelihood(x, log_p, mu, sigma_inv):
+def univariate_log_likelihood(
+    x: torch.Tensor, log_p: torch.Tensor, mu: torch.Tensor, sigma_inv: torch.Tensor
+):
     """
     Inputs:
        x: tensor of shape tensor(mb_size,1) containing the observed values
@@ -45,7 +47,7 @@ def univariate_log_likelihood(x, log_p, mu, sigma_inv):
             "Univariate code requires dimensions corresponding to number of symbols to be one."
         )
 
-    # Drop the dimensions associated with the number of symbols.
+    # Drop the dimensions that were just confirmed to be one.
     x = x.squeeze(1)
     mu = mu.squeeze(2)
     sigma_inv = sigma_inv.squeeze(3).squeeze(2)
@@ -76,7 +78,9 @@ def univariate_log_likelihood(x, log_p, mu, sigma_inv):
     return ll
 
 
-def multivariate_log_likelihood(x, log_p, mu, sigma_inv):
+def multivariate_log_likelihood(
+    x: torch.Tensor, log_p: torch.Tensor, mu: torch.Tensor, sigma_inv: torch.Tensor
+):
     """Inputs:
        x (tensor(mb_size, channels)): values
        log_p (tensor(mb_size, mixture_componente)):
@@ -94,11 +98,17 @@ def multivariate_log_likelihood(x, log_p, mu, sigma_inv):
        tensor(mb_size): log likelihood for each sample in batch
 
     """
-    mb_size, channels = x.shape
-    mixture_components = mu.shape[1]
+    mb_size, mixture_components, channels = sigma_inv.shape[:3]
+    if (
+        x.shape != (mb_size, channels)
+        or log_p.shape != (mb_size, mixture_components)
+        or mu.shape != (mb_size, mixture_components, channels)
+        or sigma_inv.shape != (mb_size, mixture_components, channels, channels)
+    ):
+        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
 
     # Ensure the sigma_inv matrix is lower triangular
-    # Values in the upper triangle are ignored
+    # Values in the upper triangle part get ignored
     sigma_inv = torch.tril(sigma_inv)
 
     e = x.unsqueeze(1).expand(mb_size, mixture_components, channels) - mu
@@ -154,7 +164,7 @@ def univariate_combine_metrics(p, mu, sigma_inv):
         p: tensor of shape (mb_size, mixture_componente): probability of each component
         mu: tensor of shape (mb_size, mixture_components, 1): mu for each
             component.
-        sigma_inv: tensor of shape (mb_size, mixture_components, 1) containing
+        sigma_inv: tensor of shape (mb_size, mixture_components, 1, 1) containing
         the inverse of the standard deviation of each component.
 
     Outputs:
@@ -162,9 +172,23 @@ def univariate_combine_metrics(p, mu, sigma_inv):
         std_dev: tensor of shape (mb_size, 1, 1) containing the
             stanrdard deviation of the mixture.
 
-        Note tha the return value is the standard deviation and not the inverse
+        Note tha the return value is the standard deviation and *not* the inverse
         of the standard deviation.
     """
+    if not isinstance(p, torch.Tensor):
+        p = torch.tensor(p, dtype=torch.float)
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.tensor(mu, dtype=torch.float)
+    if not isinstance(sigma_inv, torch.Tensor):
+        sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
+
+    mb_size, mixture_components, channels = sigma_inv.shape[:3]
+    if (
+        p.shape != (mb_size, mixture_components)
+        or mu.shape != (mb_size, mixture_components, channels)
+        or sigma_inv.shape != (mb_size, mixture_components, channels, channels)
+    ):
+        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
 
     symbols = mu.shape[2]
     if symbols != 1:

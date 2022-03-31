@@ -18,8 +18,9 @@ def multivariate_stats(x):
       TODO: To improve numerical stability, Use an SVD to compute the Cholesky
       factor rather than the naive formula.
     """
-    # Create tensor version of x in case it wasn't
-    x = torch.tensor(x)
+    # Create tensor version of x in case it isn't already
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x)
 
     mb_size, channels = x.shape
     mu = torch.mean(x, dim=0)
