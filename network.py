@@ -148,14 +148,16 @@ class TimeSeriesFeatures(torch.nn.Module):
 
         blend_exogenous_layers = [
             torch.nn.Linear(
-                feature_dimension + exogenous_dimension,
+                feature_dimension + exogenous_dimension
+                if window_size > 0
+                else exogenous_dimension,
                 feature_dimension,
             ),
             batch_norm_factory_1d(feature_dimension, use_batch_norm),
             activation,
             torch.nn.Dropout(dropout),
         ]
-        for _ in range(1):
+        for _ in range(0):
             blend_exogenous_layers.extend(
                 [
                     torch.nn.Linear(
@@ -195,7 +197,7 @@ class TimeSeriesFeatures(torch.nn.Module):
         else:
             # window should be empty (size 0), so we can reshape it to another
             # empty tensor with the correct dimensions so that the cat below works.
-            time_series_features = window.reshape((batch_size, self.feature_dimension))
+            time_series_features = window.reshape((batch_size, 0))
 
         # Concatenate time series feature vector with exogenous features (if
         # provided) and add another mixing layer to allow them to interact
