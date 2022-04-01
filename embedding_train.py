@@ -26,7 +26,7 @@ DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
-MIXTURE_COMPONENTS = 3  # Was 4
+DEFAULT_MIXTURE_COMPONENTS = 3  # Was 4, then 3
 DROPOUT_P = 0.50
 BETA1 = 0.95
 BETA2 = 0.999
@@ -64,7 +64,11 @@ sigmoid = torch.nn.Sigmoid()
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 
-def get_model(window_size=DEFAULT_WINDOW_SIZE, model_file=None):
+def get_model(
+    window_size=DEFAULT_WINDOW_SIZE,
+    mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+    model_file=None,
+):
     default_network_class = network.MixtureModel
 
     try:
@@ -77,7 +81,7 @@ def get_model(window_size=DEFAULT_WINDOW_SIZE, model_file=None):
             window_size,
             1,
             feature_dimension=FEATURE_DIMENSION,
-            mixture_components=MIXTURE_COMPONENTS,
+            mixture_components=mixture_components,
             exogenous_dimension=EMBEDDING_DIMENSION,
             dropout=DROPOUT_P,
             use_batch_norm=USE_BATCH_NORM,
@@ -128,6 +132,7 @@ class SymbolDataset(torch.utils.data.Dataset):
     help="Train only the embeddings",
 )
 @click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
+@click.option("--mixture_components", default=DEFAULT_MIXTURE_COMPONENTS, type=int)
 def main(
     project,
     model_file,
@@ -136,6 +141,7 @@ def main(
     tune_embeddings,
     just_embeddings,
     window_size,
+    mixture_components,
 ):
     # Rewrite symbosl in `symbol` with uppercase versions
     symbol = list(map(str.upper, symbol))
@@ -148,7 +154,11 @@ def main(
     print(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
-    n_network, parameters = get_model(window_size=window_size, model_file=model_file)
+    n_network, parameters = get_model(
+        window_size=window_size,
+        mixture_components=mixture_components,
+        model_file=model_file,
+    )
     n_network = n_network.to(device)
 
     embeddings = torch.nn.Embedding(len(symbol), EMBEDDING_DIMENSION)
