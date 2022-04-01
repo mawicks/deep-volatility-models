@@ -46,16 +46,11 @@ current_path = os.path.dirname(os.path.realpath(__file__))
 data_root = os.path.join(current_path, "data")
 model_root = os.path.join(current_path, "models")
 
-print("data_root: ", data_root)
-print("model_root: ", model_root)
-
 if torch.cuda.is_available():
     dev = "cuda:0"
 else:
     dev = "cpu"
 device = torch.device(dev)
-
-print("device: ", device)
 
 training_start_date = dt.date(year=1998, month=1, day=1)
 test_size = 756
@@ -143,6 +138,10 @@ def main(
     window_size,
     mixture_components,
 ):
+    print("data_root: ", data_root)
+    print("model_root: ", model_root)
+    print("device: ", device)
+
     # Rewrite symbosl in `symbol` with uppercase versions
     symbol = list(map(str.upper, symbol))
 
