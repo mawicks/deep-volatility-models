@@ -36,28 +36,22 @@ def univariate_log_likelihood(
     the number of symbols are required to be 1.
 
     """
-    # Verify that the dimensions associated with the number of symbols are all 1.
+    mb_size, mixture_components, symbols = sigma_inv.shape[:3]
     if (
-        x.shape[1] != 1
-        or mu.shape[2] != 1
-        or sigma_inv.shape[2] != 1
-        or sigma_inv.shape[3] != 1
+        x.shape != (mb_size, symbols)
+        or log_p.shape != (mb_size, mixture_components)
+        or mu.shape != (mb_size, mixture_components, symbols)
+        or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
     ):
-        raise ValueError(
-            "Univariate code requires dimensions corresponding to number of symbols to be one."
-        )
+        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+
+    if symbols != 1:
+        raise ValueError("This function requires the number of symbols to be 1")
 
     # Drop the dimensions that were just confirmed to be one.
     x = x.squeeze(1)
     mu = mu.squeeze(2)
     sigma_inv = sigma_inv.squeeze(3).squeeze(2)
-
-    if (
-        x.shape[0] != mu.shape[0]
-        or mu.shape != log_p.shape
-        or mu.shape != sigma_inv.shape
-    ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
 
     # Subtract mu from x in each component.
     # Be explicit rather than relying on broadcasting
@@ -182,15 +176,14 @@ def univariate_combine_metrics(p, mu, sigma_inv):
     if not isinstance(sigma_inv, torch.Tensor):
         sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
 
-    mb_size, mixture_components, channels = sigma_inv.shape[:3]
+    mb_size, mixture_components, symbols = sigma_inv.shape[:3]
     if (
         p.shape != (mb_size, mixture_components)
-        or mu.shape != (mb_size, mixture_components, channels)
-        or sigma_inv.shape != (mb_size, mixture_components, channels, channels)
+        or mu.shape != (mb_size, mixture_components, symbols)
+        or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
     ):
         raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
 
-    symbols = mu.shape[2]
     if symbols != 1:
         raise ValueError("This code requires the number of symbols to be 1")
 
