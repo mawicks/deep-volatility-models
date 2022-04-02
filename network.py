@@ -103,6 +103,9 @@ class TimeSeriesFeatures(torch.nn.Module):
     ):
         super().__init__()
 
+        if window_size == 0 and exogenous_dimension == 0:
+            raise ValueError("window_size and exogenous_dimension cannot both be zero.")
+
         self.__setattr__("_window_size", window_size)
         self.__setattr__("_feature_dimension", feature_dimension)
 
@@ -261,7 +264,7 @@ class UnivariateHead(torch.nn.Module):
         mu = self.mu_head(latents).unsqueeze(2)
         sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
 
-        return log_p, mu, sigma_inv, latents
+        return log_p, mu, sigma_inv
 
 
 class MultivariateHead(torch.nn.Module):
@@ -332,7 +335,7 @@ class MultivariateHead(torch.nn.Module):
         output_channels, input_channels = sigma_inv.shape[2:]
         sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
 
-        return log_p, mu, sigma_inv, latents
+        return log_p, mu, sigma_inv
 
 
 class MixtureModel(torch.nn.Module):
@@ -384,7 +387,7 @@ class MixtureModel(torch.nn.Module):
         output_channels, input_channels = self.sigma_inv_output.kernel_size
         return features_dimension, components, output_channels, input_channels
 
-    def forward(self, context, embedding=None):
+    def forward(self, time_series, embedding=None):
         """
         Argument:
            context: (minibatch_size, channels, window_size)
@@ -398,12 +401,12 @@ class MixtureModel(torch.nn.Module):
 
         """
         # Get a "flat" feature vector for the series.
-        latents = self.time_series_features(context, embedding)
+        latents = self.time_series_features(time_series, embedding)
 
-        log_p_raw, mu, sigma_inv, latents = self.head(latents)
+        log_p, mu, sigma_inv = self.head(latents)
 
         if not self.training:
             mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
             sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
-        return log_p_raw, mu, sigma_inv, latents
+        return log_p, mu, sigma_inv, latents
