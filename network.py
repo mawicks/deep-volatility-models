@@ -86,10 +86,6 @@ class TimeSeriesFeatures(torch.nn.Module):
     def window_size(self):
         return self._window_size
 
-    @property
-    def feature_dimension(self):
-        return self._feature_dimension
-
     def __init__(
         self,
         input_channels: int,
@@ -107,7 +103,6 @@ class TimeSeriesFeatures(torch.nn.Module):
             raise ValueError("window_size and exogenous_dimension cannot both be zero.")
 
         self.__setattr__("_window_size", window_size)
-        self.__setattr__("_feature_dimension", feature_dimension)
 
         def conv_block(input_channels, width):
             return [
@@ -160,7 +155,10 @@ class TimeSeriesFeatures(torch.nn.Module):
             activation,
             torch.nn.Dropout(dropout),
         ]
-        for _ in range(0):
+
+        # Following block doesn't show improvement, so we'll probably remove it
+        # eventualy
+        for _ in range(1):  # pragma: no cover
             blend_exogenous_layers.extend(
                 [
                     torch.nn.Linear(
@@ -240,12 +238,6 @@ class UnivariateHead(torch.nn.Module):
         self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
         self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)
 
-    def __dimensions(self):
-        features_dimension = self.sigma_inv_head.in_channels
-        components = self.sigma_inv_head.out_channels
-        output_channels = input_channels = 1
-        return features_dimension, components, output_channels, input_channels
-
     def forward(self, latents):
         """
         Argument:
@@ -300,12 +292,6 @@ class MultivariateHead(torch.nn.Module):
             (output_channels, input_channels),
         )
 
-    def __dimensions(self):
-        features_dimension = self.sigma_inv_output.in_channels
-        components = self.sigma_inv_output.out_channels
-        output_channels, input_channels = self.sigma_inv_output.kernel_size
-        return features_dimension, components, output_channels, input_channels
-
     def forward(self, latents):
         """
         Argument:
@@ -342,7 +328,7 @@ class MixtureModel(torch.nn.Module):
     """ """
 
     @property
-    def context_size(self):
+    def window_size(self):
         return self.time_series_features.window_size
 
     def __init__(
@@ -361,9 +347,6 @@ class MixtureModel(torch.nn.Module):
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
-
         self.time_series_features = TimeSeriesFeatures(
             input_channels,
             window_size,
@@ -371,6 +354,7 @@ class MixtureModel(torch.nn.Module):
             exogenous_dimension=exogenous_dimension,
             gaussian_noise=gaussian_noise,
             dropout=dropout,
+            activation=activation,
             use_batch_norm=use_batch_norm,
         )
 
@@ -380,12 +364,6 @@ class MixtureModel(torch.nn.Module):
             feature_dimension=feature_dimension,
             mixture_components=mixture_components,
         )
-
-    def __dimensions(self):
-        features_dimension = self.sigma_inv_output.in_channels
-        components = self.sigma_inv_output.out_channels
-        output_channels, input_channels = self.sigma_inv_output.kernel_size
-        return features_dimension, components, output_channels, input_channels
 
     def forward(self, time_series, embedding=None):
         """

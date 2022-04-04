@@ -1,6 +1,9 @@
+import pytest
+
 import torch
 
 import network
+
 
 BATCH_SIZE = 5
 NOISE_DIM = 77
@@ -31,6 +34,15 @@ def test_min_max_clamping():
     assert float(min_y[1]) <= 4.0
 
 
+def test_untrained_mixmax_clamping_passes_all():
+    MAGNITUDE = 1e6
+    filter = network.MinMaxClamping()
+    filter.train(False)
+    x = MAGNITUDE * torch.randn(3, 2)
+    y = filter(x)
+    assert (y == x).all()
+
+
 def test_gaussian_noise():
     SIGMA = 0.1
     noise = network.GaussianNoise(SIGMA)
@@ -58,7 +70,45 @@ def is_lower_triangular(m):
                         assert m[mb_i, mx_i, i, col_offset + j] != 0.0
 
 
-def test_mixture_model():
+@pytest.mark.parametrize(
+    "batch_size, window_size, input_symbols, output_symbols, feature_dim,"
+    "mixture_components, exogenous_dim, use_batch_norm, expect_value_error",
+    [
+        (13, 0, 1, None, 3, 5, 7, True, False),  # Window size of zero
+        (13, 4, 1, None, 3, 5, 7, True, False),  # Chnage window size to 4
+        (13, 16, 1, None, 3, 5, 7, True, False),  # Chnage window size to 16
+        (13, 64, 1, None, 3, 5, 7, True, False),  # Change window size to 64
+        (13, 256, 1, None, 3, 5, 7, True, False),  # Change window size to 256
+        (13, 64, 1, None, 3, 5, 0, True, False),  # Without an exogenous input
+        (13, 64, 13, None, 3, 5, 7, True, False),  # Input symbol dimension other than 1
+        (13, 64, 13, 13, 3, 5, 7, True, False),  # Speciying output symbol dim
+        (13, 64, 13, 11, 3, 5, 7, True, False),  # Differing input/output symbol dim
+        (13, 64, 1, None, 3, 5, 7, False, False),  # Without batch norm
+        (13, 60, 13, 13, 3, 5, 7, True, True),  # Window size is not valid
+        (
+            13,
+            0,
+            1,
+            None,
+            3,
+            5,
+            0,
+            True,
+            True,
+        ),  # Window size of zero AND no exogenous input
+    ],
+)
+def test_mixture_model(
+    batch_size,
+    window_size,
+    input_symbols,
+    output_symbols,
+    feature_dim,
+    mixture_components,
+    exogenous_dim,
+    use_batch_norm,
+    expect_value_error,
+):
     """Test that a mmixture network can be created and evaluated
     with different internal feature dimensions.  This is only a sanity
     check that all of the dimensions conform and the network can
@@ -67,59 +117,56 @@ def test_mixture_model():
     training flag on and off.
 
     """
+    if expect_value_error:
+        with pytest.raises(ValueError):
+            g = network.MixtureModel(
+                window_size,
+                input_symbols,
+                output_symbols,
+                exogenous_dimension=exogenous_dim,
+                output_head_type=network.MultivariateHead,
+                feature_dimension=feature_dim,
+                mixture_components=mixture_components,
+                use_batch_norm=use_batch_norm,
+            )
+    else:
+        g = network.MixtureModel(
+            window_size,
+            input_symbols,
+            output_symbols,
+            exogenous_dimension=exogenous_dim,
+            output_head_type=network.MultivariateHead,
+            feature_dimension=feature_dim,
+            mixture_components=mixture_components,
+            use_batch_norm=use_batch_norm,
+        )
+        for train in (True, False):
+            g.train(train)
+            log_p, mu, sigma_inv, latents = g(
+                torch.randn((batch_size, input_symbols, window_size)),
+                torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None,
+            )
 
-    for input_channels in range(3, 4):
-        for output_channels in [None, 1, 2, input_channels]:
-            for features in range(3, 5):
-                for mixture in range(8, 10):
-                    for window_size in [0, 16, 64, 256]:
-                        for exogenous_dimension in [0, 4]:
-                            if window_size == 0 and exogenous_dimension == 0:
-                                continue
+            assert log_p.shape == (batch_size, mixture_components)
 
-                            g = network.MixtureModel(
-                                window_size,
-                                input_channels,
-                                output_channels,
-                                exogenous_dimension=exogenous_dimension,
-                                output_head_type=network.MultivariateHead,
-                                feature_dimension=features,
-                                mixture_components=mixture,
-                            )
+            # Make sure all probabilities add up to one
+            # (logs add up to zero)
+            assert torch.abs(torch.sum(torch.logsumexp(log_p, dim=1))) < 1e-5
 
-                            for train in (True, False):
-                                g.train(train)
-                                log_p, mu, sigma_inv, latents = g(
-                                    torch.randn(
-                                        (BATCH_SIZE, input_channels, window_size)
-                                    ),
-                                    torch.randn(BATCH_SIZE, exogenous_dimension)
-                                    if exogenous_dimension > 0
-                                    else None,
-                                )
+            if output_symbols is None:
+                output_symbols = input_symbols
 
-                                assert log_p.shape == (BATCH_SIZE, mixture)
+            assert mu.shape == (batch_size, mixture_components, output_symbols)
+            assert sigma_inv.shape == (
+                batch_size,
+                mixture_components,
+                output_symbols,
+                input_symbols,
+            )
 
-                                # Make sure all probabilities add up to one
-                                # (logs add up to zero)
-                                assert (
-                                    torch.abs(torch.sum(torch.logsumexp(log_p, dim=1)))
-                                    < 1e-5
-                                )
+            is_lower_triangular(sigma_inv)
 
-                                if output_channels is None:
-                                    oc = input_channels
-                                else:
-                                    oc = output_channels
+            assert latents.shape == (batch_size, feature_dim)
 
-                                assert mu.shape == (BATCH_SIZE, mixture, oc)
-                                assert sigma_inv.shape == (
-                                    BATCH_SIZE,
-                                    mixture,
-                                    oc,
-                                    input_channels,
-                                )
-
-                                is_lower_triangular(sigma_inv)
-
-                                assert latents.shape == (BATCH_SIZE, features)
+            # Confirm that the window_size property returns the correct size:
+            assert window_size == g.window_size

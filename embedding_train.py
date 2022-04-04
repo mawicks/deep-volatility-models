@@ -23,7 +23,7 @@ SEED = 24  # 42
 
 EPOCHS = 30000
 DEFAULT_WINDOW_SIZE = 64
-EMBEDDING_DIMENSION = 6
+EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
 DEFAULT_MIXTURE_COMPONENTS = 3  # Was 4, then 3
@@ -181,7 +181,7 @@ def main(
 
     print(parameters)
 
-    context_size = n_network.context_size
+    window_size = n_network.window_size
 
     # Refresh historical data
     print("Reading historical data")
@@ -199,7 +199,7 @@ def main(
         log_returns = symbol_history.loc[:, (s, "log_return")]
         windowed_returns = time_series.RollingWindowSeries(
             log_returns,
-            1 + context_size,
+            1 + window_size,
             create_channel_dim=True,
         )
         print(windowed_returns[0])
