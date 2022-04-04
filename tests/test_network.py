@@ -110,11 +110,12 @@ def test_mixture_model(
     expect_value_error,
 ):
     """Test that a mmixture network can be created and evaluated
-    with different internal feature dimensions.  This is only a sanity
-    check that all of the dimensions conform and the network can
-    produce output.  These are untrained networks so that's all we
-    expect.  We also check that the network executes properly with the
-    training flag on and off.
+    with different internal feature dimensions.  This is only a sanity check
+    that all of the dimensions conform and the network can produce output.
+    These are untrained networks so that's all we expect.  There is more
+    extensive validatation for unit tests of the individual head classes.  Here
+    we also check that the network executes properly with the training flag on
+    and off.
 
     """
     if expect_value_error:
@@ -149,6 +150,72 @@ def test_mixture_model(
 
             assert log_p.shape == (batch_size, mixture_components)
 
+            if output_symbols is None:
+                output_symbols = input_symbols
+
+            assert mu.shape == (batch_size, mixture_components, output_symbols)
+            assert sigma_inv.shape == (
+                batch_size,
+                mixture_components,
+                output_symbols,
+                input_symbols,
+            )
+
+            assert latents.shape == (batch_size, feature_dim)
+
+            # Confirm that the window_size property returns the correct size:
+            assert window_size == g.window_size
+
+
+@pytest.mark.parametrize(
+    "head_class, batch_size, input_symbols, output_symbols, feature_dim,"
+    "mixture_components, expect_value_error",
+    [
+        (network.MultivariateHead, 13, 3, None, 5, 7, False),
+        (network.MultivariateHead, 13, 3, 3, 5, 7, False),
+        (network.MultivariateHead, 13, 3, 2, 5, 7, False),
+        (network.UnivariateHead, 13, 1, 1, 5, 7, False),
+        (network.UnivariateHead, 13, 3, None, 5, 7, True),
+        (network.UnivariateHead, 13, 3, 3, 5, 7, True),
+    ],
+)
+def test_head_classes(
+    head_class,
+    batch_size,
+    input_symbols,
+    output_symbols,
+    feature_dim,
+    mixture_components,
+    expect_value_error,
+):
+    """Test that a head network can be created and evaluated
+    with different internal feature dimensions.  Also do some sanity checks on
+    the output where the head should constrain it, such as having probabilities
+    that add up to one and having an inverse sqrt of covariance matrix that is
+    triangular. These are untrained networks so that's all we expect.  We also
+    check that the network executes properly with the training flag on and off.
+    """
+    if expect_value_error:
+        with pytest.raises(ValueError):
+            head = head_class(
+                input_symbols,
+                output_symbols,
+                feature_dimension=feature_dim,
+                mixture_components=mixture_components,
+            )
+    else:
+        head = head_class(
+            input_symbols,
+            output_symbols,
+            feature_dimension=feature_dim,
+            mixture_components=mixture_components,
+        )
+        for train in (True, False):
+            head.train(train)
+            log_p, mu, sigma_inv = head(torch.randn(batch_size, feature_dim))
+
+            assert log_p.shape == (batch_size, mixture_components)
+
             # Make sure all probabilities add up to one
             # (logs add up to zero)
             assert torch.abs(torch.sum(torch.logsumexp(log_p, dim=1))) < 1e-5
@@ -165,8 +232,3 @@ def test_mixture_model(
             )
 
             is_lower_triangular(sigma_inv)
-
-            assert latents.shape == (batch_size, feature_dim)
-
-            # Confirm that the window_size property returns the correct size:
-            assert window_size == g.window_size
