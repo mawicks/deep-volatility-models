@@ -72,30 +72,22 @@ def is_lower_triangular(m):
 
 @pytest.mark.parametrize(
     "batch_size, window_size, input_symbols, output_symbols, feature_dim,"
-    "mixture_components, exogenous_dim, use_batch_norm, expect_value_error",
+    "mixture_components, exogenous_dim, extra_mixing_layers,"
+    "use_batch_norm, expect_value_error",
     [
-        (13, 0, 1, None, 3, 5, 7, True, False),  # Window size of zero
-        (13, 4, 1, None, 3, 5, 7, True, False),  # Chnage window size to 4
-        (13, 16, 1, None, 3, 5, 7, True, False),  # Chnage window size to 16
-        (13, 64, 1, None, 3, 5, 7, True, False),  # Change window size to 64
-        (13, 256, 1, None, 3, 5, 7, True, False),  # Change window size to 256
-        (13, 64, 1, None, 3, 5, 0, True, False),  # Without an exogenous input
-        (13, 64, 13, None, 3, 5, 7, True, False),  # Input symbol dimension other than 1
-        (13, 64, 13, 13, 3, 5, 7, True, False),  # Speciying output symbol dim
-        (13, 64, 13, 11, 3, 5, 7, True, False),  # Differing input/output symbol dim
-        (13, 64, 1, None, 3, 5, 7, False, False),  # Without batch norm
-        (13, 60, 13, 13, 3, 5, 7, True, True),  # Window size is not valid
-        (
-            13,
-            0,
-            1,
-            None,
-            3,
-            5,
-            0,
-            True,
-            True,
-        ),  # Window size of zero AND no exogenous input
+        (13, 0, 1, None, 3, 5, 7, 2, True, False),  # Window size of zero
+        (13, 4, 1, None, 3, 5, 7, 2, True, False),  # Chnage window size to 4
+        (13, 16, 1, None, 3, 5, 7, 2, True, False),  # Chnage window size to 16
+        (13, 64, 1, None, 3, 5, 7, 2, True, False),  # Change window size to 64
+        (13, 256, 1, None, 3, 5, 7, 2, True, False),  # Change window size to 256
+        (13, 64, 1, None, 3, 5, 0, 2, True, False),  # Without an exogenous input
+        (13, 64, 1, None, 3, 5, 7, 0, True, False),  # Without extra mixing layers
+        (13, 64, 13, None, 3, 5, 7, 2, True, False),  # Symbol dimension other than 1
+        (13, 64, 13, 13, 3, 5, 7, 2, True, False),  # Speciying output symbol dim
+        (13, 64, 13, 11, 3, 5, 7, 2, True, False),  # Differing input/output symbol dim
+        (13, 64, 1, None, 3, 5, 7, 2, False, False),  # Without batch norm
+        (13, 60, 13, 13, 3, 5, 7, 2, True, True),  # Window size is not valid
+        (13, 0, 1, None, 3, 5, 0, 2, True, True),  # No Window AND no exogenous input
     ],
 )
 def test_mixture_model(
@@ -106,6 +98,7 @@ def test_mixture_model(
     feature_dim,
     mixture_components,
     exogenous_dim,
+    extra_mixing_layers,
     use_batch_norm,
     expect_value_error,
 ):
@@ -128,6 +121,7 @@ def test_mixture_model(
                 output_head_type=network.MultivariateHead,
                 feature_dimension=feature_dim,
                 mixture_components=mixture_components,
+                extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
             )
     else:
@@ -139,6 +133,7 @@ def test_mixture_model(
             output_head_type=network.MultivariateHead,
             feature_dimension=feature_dim,
             mixture_components=mixture_components,
+            extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
         )
         for train in (True, False):

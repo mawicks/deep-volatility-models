@@ -96,6 +96,7 @@ class TimeSeriesFeatures(torch.nn.Module):
         activation=relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
+        extra_mixing_layers=0,
     ):
         super().__init__()
 
@@ -158,7 +159,7 @@ class TimeSeriesFeatures(torch.nn.Module):
 
         # Following block doesn't show improvement, so we'll probably remove it
         # eventualy
-        for _ in range(1):  # pragma: no cover
+        for _ in range(extra_mixing_layers):
             blend_exogenous_layers.extend(
                 [
                     torch.nn.Linear(
@@ -340,6 +341,7 @@ class MixtureModel(torch.nn.Module):
         feature_dimension=DEFAULT_MIXTURE_FEATURES,
         mixture_components=DEFAULT_MIXTURE_COMPONENTS,
         exogenous_dimension=0,
+        extra_mixing_layers=0,
         gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
         activation=relu,
         dropout=DEFAULT_DROPOUT_P,
@@ -352,6 +354,7 @@ class MixtureModel(torch.nn.Module):
             window_size,
             feature_dimension=feature_dimension,
             exogenous_dimension=exogenous_dimension,
+            extra_mixing_layers=extra_mixing_layers,
             gaussian_noise=gaussian_noise,
             dropout=dropout,
             activation=activation,
