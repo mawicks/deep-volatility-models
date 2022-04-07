@@ -1,5 +1,6 @@
 from typing import Iterable, Any
 
+import numpy as np
 import torch
 import torch.utils.data
 
@@ -150,7 +151,9 @@ class RollingWindowSeries(torch.utils.data.Dataset):
         if stride <= 0:
             raise ValueError("Stride cannot be negative")
 
-        self.__series = tuple(series)
+        # Originally np.array() was simply suple(series)
+        # pytorch issued a warning a recommended the use of np.array()
+        self.__series = np.array(series)
 
         if (
             len(self.__series) > 0
