@@ -41,7 +41,7 @@ class FileSystemHistory(object):
         return df
 
 
-def caching_downloader_factory(data_source, file_mgr):
+def CachingDownloader(data_source, file_mgr):
     def download(
         symbols: Union[Iterable[str], str], overwrite_existing: bool = False
     ) -> Dict[str, pd.DataFrame]:
@@ -59,7 +59,7 @@ def caching_downloader_factory(data_source, file_mgr):
             symbols = missing
 
         if len(symbols) > 0:
-            ds = data_source.price_history(symbols)
+            ds = data_source(symbols)
 
             # Write the results to the cache
             for symbol in symbols:
@@ -72,8 +72,8 @@ def caching_downloader_factory(data_source, file_mgr):
     return download
 
 
-def caching_loader_factory(data_source, file_mgr):
-    caching_download = caching_downloader_factory(data_source, file_mgr)
+def CachingLoader(data_source, file_mgr):
+    caching_download = CachingDownloader(data_source, file_mgr)
 
     def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> None:
         """
@@ -120,7 +120,7 @@ def caching_loader_factory(data_source, file_mgr):
 if __name__ == "__main__":  # pragma: no cover
     cache = FileSystemHistory("training_data")
     data_source = data_sources.YFinanceSource()
-    load = caching_loader_factory(data_source, cache)
+    load = CachingLoader(data_source, cache)
     symbols = ["QQQ", "SPY", "BND", "EDV"]
     df = load(symbols, overwrite_existing=False)
 

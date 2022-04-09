@@ -37,11 +37,7 @@ def data_source():
     """
     Create an instance of a data source for testing
     """
-    mock_data_source = create_autospec(data_sources.YFinanceSource)
-    mock_data_source.price_history = lambda symbols: {
-        s.upper(): SAMPLE_DF for s in symbols
-    }
-
+    mock_data_source = lambda symbols: {s.upper(): SAMPLE_DF for s in symbols}
     return mock_data_source
 
 
@@ -82,7 +78,7 @@ def test_history(data_source, cache_tmp_path):
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
-    caching_download = history.caching_downloader_factory(data_source, cache_tmp_path)
+    caching_download = history.CachingDownloader(data_source, cache_tmp_path)
 
     response = caching_download(partial_symbol_set)
     assert len(response) == len(partial_symbol_set)
@@ -109,5 +105,5 @@ def test_history(data_source, cache_tmp_path):
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    load = history.caching_loader_factory(data_source, cache_tmp_path)
+    load = history.CachingLoader(data_source, cache_tmp_path)
     load("pqr")

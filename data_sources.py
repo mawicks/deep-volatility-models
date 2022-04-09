@@ -13,13 +13,13 @@ import utils
 logging.basicConfig(level=logging.INFO)
 
 
-class YFinanceSource(object):
+def YFinanceSource():
     """
     xxx
     >>> import data_sources
     >>> symbols = ["SPY", "QQQ"]
     >>> ds = data_sources.YFinanceSource()
-    >>> response = ds.price_history(symbols)
+    >>> response = ds(symbols)
     >>> response["SPY"][:4][['open', 'close']]  # doctest: +NORMALIZE_WHITESPACE
                     open     close
     date
@@ -30,7 +30,6 @@ class YFinanceSource(object):
         >>>
     """
 
-    @staticmethod
     def _add_columns(df):
         new_df = df.dropna().reset_index()
         rename_dict = {c: utils.rename_column(c) for c in new_df.columns}
@@ -40,9 +39,7 @@ class YFinanceSource(object):
         new_df.set_index("date", inplace=True)
         return new_df
 
-    def price_history(
-        self, symbol_set: Union[Iterable[str], str]
-    ) -> Dict[str, pd.DataFrame]:
+    def price_history(symbol_set: Union[Iterable[str], str]) -> Dict[str, pd.DataFrame]:
 
         # Convert symbol_set to a list
         symbols = utils.to_symbol_list(symbol_set)
@@ -62,16 +59,18 @@ class YFinanceSource(object):
                 symbol_df = df
 
             response[symbol] = (
-                self._add_columns(symbol_df).dropna().applymap(lambda x: round(x, 6))
+                _add_columns(symbol_df).dropna().applymap(lambda x: round(x, 6))
             )
 
         return response
 
+    return price_history
+
 
 if __name__ == "__main__":  # pragma: no cover
     symbols = ["spy", "qqq"]
-    ds = YFinanceSource()
-    response = ds.price_history(symbols)
+    ds = YFinanceSourceFactory()
+    response = ds(symbols)
 
     for k, v in response.items():
         print(f"{k}:\n{v.head(3)}")
