@@ -188,9 +188,9 @@ def main(
     splits_by_symbol = {}
     symbol_encoding_dict = {}
 
-    cache = history.FileSystemHistory("training_data")
+    data_store = history.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    history_loader = history.CachingLoader(data_source, cache)
+    history_loader = history.CachingLoader(data_source, data_store)
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i

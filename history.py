@@ -14,7 +14,7 @@ import utils
 logging.basicConfig(level=logging.INFO)
 
 
-class FileSystemHistory(object):
+class FileSystemStore(object):
     def __init__(self, cache_dir="."):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
@@ -26,7 +26,7 @@ class FileSystemHistory(object):
     def exists(self, symbol: str) -> bool:
         return os.path.exists(self._path(symbol))
 
-    def save(self, symbol: str, df: pd.DataFrame):
+    def write(self, symbol: str, df: pd.DataFrame):
         df = df.reset_index().set_index("date")
         df.sort_index(inplace=True)
         df.to_csv(self._path(symbol), index=True)
@@ -41,7 +41,7 @@ class FileSystemHistory(object):
         return df
 
 
-def CachingDownloader(data_source, file_mgr):
+def CachingDownloader(data_source, data_store):
     def download(
         symbols: Union[Iterable[str], str], overwrite_existing: bool = False
     ) -> Dict[str, pd.DataFrame]:
@@ -52,7 +52,7 @@ def CachingDownloader(data_source, file_mgr):
             # Determine what's missing
             missing = []
             for symbol in symbols:
-                if not file_mgr.exists(symbol):
+                if not data_store.exists(symbol):
                     missing.append(symbol)
 
             # Replace full list with missing list
@@ -63,7 +63,7 @@ def CachingDownloader(data_source, file_mgr):
 
             # Write the results to the cache
             for symbol in symbols:
-                file_mgr.save(symbol, ds[symbol])
+                data_store.write(symbol, ds[symbol])
         else:
             ds = {}
 
@@ -72,8 +72,8 @@ def CachingDownloader(data_source, file_mgr):
     return download
 
 
-def CachingLoader(data_source, file_mgr):
-    caching_download = CachingDownloader(data_source, file_mgr)
+def CachingLoader(data_source, data_store):
+    caching_download = CachingDownloader(data_source, data_store)
 
     def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> None:
         """
@@ -107,7 +107,7 @@ def CachingLoader(data_source, file_mgr):
 
         dataframes = []
         for symbol in symbols:
-            df = file_mgr.load(symbol)
+            df = data_store.load(symbol)
             df["symbol"] = symbol
             dataframes.append(df)
 
@@ -118,9 +118,9 @@ def CachingLoader(data_source, file_mgr):
 
 
 if __name__ == "__main__":  # pragma: no cover
-    cache = FileSystemHistory("training_data")
+    data_store = FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    load = CachingLoader(data_source, cache)
+    load = CachingLoader(data_source, data_store)
     symbols = ["QQQ", "SPY", "BND", "EDV"]
     df = load(symbols, overwrite_existing=False)
 
