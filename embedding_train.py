@@ -188,14 +188,14 @@ def main(
     splits_by_symbol = {}
     symbol_encoding_dict = {}
 
-    cache = history.FileSystemHistoryCache("training_data")
+    cache = history.FileSystemHistory("training_data")
     data_source = data_sources.YFinanceSource()
-    history_loader = history.History(data_source, cache)
+    history_loader = history.caching_loader_factory(data_source, cache)
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i
 
-        symbol_history = history_loader.load(s, overwrite_existing=refresh)
+        symbol_history = history_loader(s, overwrite_existing=refresh)
         log_returns = symbol_history.loc[:, (s, "log_return")]
         windowed_returns = time_series.RollingWindowSeries(
             log_returns,

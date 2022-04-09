@@ -14,7 +14,7 @@ import utils
 logging.basicConfig(level=logging.INFO)
 
 
-class FileSystemHistoryCache(object):
+class FileSystemHistory(object):
     def __init__(self, cache_dir="."):
         self.cache_dir = cache_dir
         os.makedirs(cache_dir, exist_ok=True)
@@ -28,49 +28,54 @@ class FileSystemHistoryCache(object):
 
     def save(self, symbol: str, df: pd.DataFrame):
         df = df.reset_index().set_index("date")
+        df.sort_index(inplace=True)
         df.to_csv(self._path(symbol), index=True)
 
     def load(self, symbol: str) -> pd.DataFrame:
-        return pd.read_csv(
+        df = pd.read_csv(
             self._path(symbol),
             index_col="date",
             parse_dates=["date"],
         )
+        df.sort_index(inplace=True)
+        return df
 
 
-class History(object):
-    def __init__(self, data_source, cache_mgr):
-        self.data_source = data_source
-        self.cache_mgr = cache_mgr
-
+def caching_downloader_factory(data_source, file_mgr):
     def download(
-        self, symbols: Union[Iterable[str], str], overwrite_existing: bool = False
+        symbols: Union[Iterable[str], str], overwrite_existing: bool = False
     ) -> Dict[str, pd.DataFrame]:
         # Handle the case where `symbol`is a single symbol
         symbols = utils.to_symbol_list(symbols)
 
         if not overwrite_existing:
+            # Determine what's missing
             missing = []
             for symbol in symbols:
-                if not self.cache_mgr.exists(symbol):
+                if not file_mgr.exists(symbol):
                     missing.append(symbol)
+
+            # Replace full list with missing list
             symbols = missing
 
         if len(symbols) > 0:
-            df = self.data_source.price_history(symbols)
+            ds = data_source.price_history(symbols)
 
             # Write the results to the cache
             for symbol in symbols:
-                self.cache_mgr.save(symbol, df[symbol])
+                file_mgr.save(symbol, ds[symbol])
         else:
-            df = {}
+            ds = {}
 
-        return df
+        return ds
 
-    def load(
-        self, symbols: Union[Iterable[str], str], overwrite_existing=False
-    ) -> None:
-        symbols = utils.to_symbol_list(symbols)
+    return download
+
+
+def caching_loader_factory(data_source, file_mgr):
+    caching_download = caching_downloader_factory(data_source, file_mgr)
+
+    def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> None:
         """
         Return a dataframe containing all historic values for the given set of symbosl.
         The dates are inner joined so there is one row for each date where all symbols
@@ -97,25 +102,27 @@ class History(object):
         and the second position is the value of interest (e.g., "close", "log_return", etc.)
 
         """
-
-        self.download(symbols, overwrite_existing)
+        symbols = utils.to_symbol_list(symbols)
+        caching_download(symbols, overwrite_existing)
 
         dataframes = []
         for symbol in symbols:
-            df = self.cache_mgr.load(symbol)
+            df = file_mgr.load(symbol)
             df["symbol"] = symbol
             dataframes.append(df)
 
         print(dataframes)
         return pd.concat(dataframes, axis=1, join="inner", keys=symbols)
 
+    return load
+
 
 if __name__ == "__main__":  # pragma: no cover
-    cache = FileSystemHistoryCache("training_data")
+    cache = FileSystemHistory("training_data")
     data_source = data_sources.YFinanceSource()
-    history = History(data_source, cache)
+    load = caching_loader_factory(data_source, cache)
     symbols = ["QQQ", "SPY", "BND", "EDV"]
-    df = history.load(symbols, overwrite_existing=False)
+    df = load(symbols, overwrite_existing=False)
 
     selection = df.loc[:, (symbols, "log_return")]
     print(selection)

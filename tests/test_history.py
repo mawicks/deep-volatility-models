@@ -1,7 +1,6 @@
 import pytest
 
 # Standard Python modules
-import collections
 import os
 from unittest.mock import create_autospec, patch
 
@@ -30,7 +29,7 @@ def cache_tmp_path(tmp_path):
     """
     Create an instance of CSVFileSystemCache for testing
     """
-    return history.FileSystemHistoryCache(os.fspath(tmp_path))
+    return history.FileSystemHistory(os.fspath(tmp_path))
 
 
 @pytest.fixture
@@ -83,9 +82,9 @@ def test_history(data_source, cache_tmp_path):
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
-    hist = history.History(data_source, cache_tmp_path)
+    caching_download = history.caching_downloader_factory(data_source, cache_tmp_path)
 
-    response = hist.download(partial_symbol_set)
+    response = caching_download(partial_symbol_set)
     assert len(response) == len(partial_symbol_set)
     for symbol in partial_symbol_set:
         assert cache_tmp_path.exists(symbol)
@@ -93,7 +92,7 @@ def test_history(data_source, cache_tmp_path):
     for symbol in missing_symbol_set:
         assert not cache_tmp_path.exists(symbol)
 
-    response = hist.download(full_symbol_set)
+    response = caching_download(full_symbol_set)
     # Check that only the missing symbols were downloaded
     # This is true if all missing symbols are in the response
     # and if the length of the response is equal to the number
@@ -106,8 +105,9 @@ def test_history(data_source, cache_tmp_path):
         assert cache_tmp_path.exists(symbol)
 
     # Try downloading again, which should be a no-op
-    response = hist.download(full_symbol_set)
+    response = caching_download(full_symbol_set)
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    hist.load("pqr")
+    load = history.caching_loader_factory(data_source, cache_tmp_path)
+    load("pqr")
