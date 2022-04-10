@@ -20,6 +20,11 @@ def to_symbol_list(symbols: Union[Iterable[str], str]) -> List[str]:
     return list(map(str.upper, symbols))
 
 
+def is_sorted(l: Iterable) -> bool:
+    l = tuple(l)
+    return all([x <= y for x, y in zip(l, l[1:])])
+
+
 def rename_column(c):
     """
     Standardize column naming.  No spaces and no caps.

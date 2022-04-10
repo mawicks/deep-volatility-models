@@ -2,14 +2,13 @@ import pytest
 
 # Standard Python modules
 import os
-from unittest.mock import create_autospec, patch
+from unittest.mock import patch
 
 # Third party modules
 import pandas as pd
-from uritemplate import partial
 
 # Local imports
-import data_sources
+import utils
 import history
 
 
@@ -36,17 +35,29 @@ def data_source():
 def test_symbol_history_reader_and_writer(tmp_path):
     filename = os.path.join(tmp_path, "foo.csv")
 
-    # Use writer to write outSAMPLE_df
-    writer = history.SymbolHistoryWriter(SAMPLE_DF)
-    with open(filename, "wb") as f:
-        writer(f)
+    # Use writer to write SAMPLE_df
 
-    # Use reader to read it back and compare the results.
+    # But first, intentionally reverse the order of dates.
+    sample_copy = SAMPLE_DF.reset_index().sort_values("date", ascending=False)
+    assert not utils.is_sorted(sample_copy.date)
+
+    # Define a helper to simplify writing slightly different versions of SAMEPLE_DF
     reader = history.SymbolHistoryReader()
-    with open(filename, "rb") as f:
-        loaded_df = reader(f)
 
-    assert (loaded_df == SAMPLE_DF).all().all()
+    def check(writer):
+        with open(filename, "wb") as f:
+            writer(f)
+
+        # Use reader to read it back and compare the results.
+        with open(filename, "rb") as f:
+            loaded_df = reader(f)
+
+        assert loaded_df.index.name == "date"
+        assert utils.is_sorted(loaded_df.index)
+        assert (loaded_df == SAMPLE_DF).all().all()
+
+    for df in [sample_copy, sample_copy.set_index("date")]:
+        check(history.SymbolHistoryWriter(df))
 
 
 def test_file_system_store(tmp_path):

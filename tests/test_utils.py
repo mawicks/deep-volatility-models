@@ -5,6 +5,23 @@ import utils
 
 
 @pytest.mark.parametrize(
+    "l,expected",
+    [
+        ([], True),  # Check empty list.
+        (range(4), True),  # Make sure iterables work
+        (tuple(range(4)), True),  # Make sure instantiated tuples work
+        (list(range(4)), True),  # Instantiated lists
+        (reversed(range(4)), False),  # Reversed lists should fail.
+        ([1, 1, 2, 2], True),  # Check that non-strict inequality is ok.
+        ([1] * 5, True),
+        ([1, 1, 1, 0], False),  # Edge cases?
+    ],
+)
+def test_is_sorted(l, expected):
+    assert utils.is_sorted(l) == expected
+
+
+@pytest.mark.parametrize(
     "test_input, expected_output",
     [
         ("foo", ["FOO"]),

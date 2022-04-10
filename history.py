@@ -40,7 +40,13 @@ def SymbolHistoryReader() -> Callable[[BinaryIO], pd.DataFrame]:
 
 def SymbolHistoryWriter(df: pd.DataFrame) -> Callable[[BinaryIO], None]:
     def write_symbol_history(f: BinaryIO) -> None:
-        indexed_df = df.reset_index().set_index("date")
+        # Create an index on date and write to CSV in ascending order by date
+        # with index=True
+        indexed_df = df.copy()
+
+        if indexed_df.index.name != "date":
+            indexed_df.set_index("date", inplace=True)
+
         indexed_df.sort_index(inplace=True)
         indexed_df.to_csv(f, index=True)
 
