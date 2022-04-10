@@ -30,6 +30,8 @@ def SymbolHistoryReader() -> Callable[[BinaryIO], pd.DataFrame]:
             parse_dates=["date"],
         )
 
+        # Be 100% certain it's in ascending order, even though it should have
+        # been stored that way.
         df.sort_index(inplace=True)
         return df
 
@@ -84,7 +86,7 @@ class FileSystemStore(object):
         """
         return os.path.exists(self._path(symbol))
 
-    def write(self, symbol: str, df: pd.DataFrame):
+    def write(self, symbol: str, writer: Callable[[BinaryIO], None]):
         """
         Write a key and data (must be a dataframe) to the data store
         Arguments:
@@ -93,11 +95,10 @@ class FileSystemStore(object):
         Returns:
             None
         """
-        writer = SymbolHistoryWriter(df)
         with open(self._path(symbol), "wb") as f:
             writer(f)
 
-    def read(self, symbol: str) -> pd.DataFrame:
+    def read(self, symbol: str, reader: Callable[[BinaryIO], object]) -> pd.DataFrame:
         """
         Read a dataframe given its symbol.
         Arguments:
@@ -105,10 +106,9 @@ class FileSystemStore(object):
         Returns:
             pd.DataFrame - The associated dataframe.
         """
-        reader = SymbolHistoryReader()
         with open(self._path(symbol), "rb") as f:
-            df = reader(f)
-        return df
+            result = reader(f)
+        return result
 
 
 def CachingDownloader(
@@ -157,7 +157,8 @@ def CachingDownloader(
 
             # Write the results to the cache
             for symbol in symbols:
-                data_store.write(symbol, ds[symbol])
+                writer = SymbolHistoryWriter(ds[symbol])
+                data_store.write(symbol, writer)
         else:
             ds = {}
 
@@ -200,8 +201,9 @@ def CachingLoader(data_source, data_store):
         caching_download(symbols, overwrite_existing)
 
         dataframes = []
+        reader = SymbolHistoryReader()
         for symbol in symbols:
-            df = data_store.read(symbol)
+            df = data_store.read(symbol, reader)
             df["symbol"] = symbol
             dataframes.append(df)
 
