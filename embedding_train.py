@@ -190,7 +190,7 @@ def main(
 
     data_store = history.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    history_loader = history.CachingLoader(data_source, data_store)
+    history_loader = history.CachingSymbolHistoryLoader(data_source, data_store)
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i
