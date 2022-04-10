@@ -114,6 +114,7 @@ class FileSystemStore(object):
 def CachingDownloader(
     data_source: Callable[[Union[str, Iterable[str]]], Dict[str, pd.DataFrame]],
     data_store: FileSystemStore,
+    writer_factory,
 ):
     """
     Construct and return a download function that will download and write the
@@ -157,7 +158,7 @@ def CachingDownloader(
 
             # Write the results to the cache
             for symbol in symbols:
-                writer = SymbolHistoryWriter(ds[symbol])
+                writer = writer_factory(ds[symbol])
                 data_store.write(symbol, writer)
         else:
             ds = {}
@@ -167,8 +168,8 @@ def CachingDownloader(
     return download
 
 
-def CachingLoader(data_source, data_store):
-    caching_download = CachingDownloader(data_source, data_store)
+def CachingLoader(data_source, data_store, reader_factory, writer_factory):
+    caching_download = CachingDownloader(data_source, data_store, writer_factory)
 
     def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> None:
         """
@@ -201,7 +202,7 @@ def CachingLoader(data_source, data_store):
         caching_download(symbols, overwrite_existing)
 
         dataframes = []
-        reader = SymbolHistoryReader()
+        reader = reader_factory()
         for symbol in symbols:
             df = data_store.read(symbol, reader)
             df["symbol"] = symbol
@@ -213,10 +214,16 @@ def CachingLoader(data_source, data_store):
     return load
 
 
+def CachingSymbolHistoryLoader(data_source, data_store):
+    return CachingLoader(
+        data_source, data_store, SymbolHistoryReader, SymbolHistoryWriter
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     data_store = FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    load = CachingLoader(data_source, data_store)
+    load = CachingSymbolHistoryLoader(data_source, data_store)
     symbols = ["QQQ", "SPY", "BND", "EDV"]
     df = load(symbols, overwrite_existing=False)
 

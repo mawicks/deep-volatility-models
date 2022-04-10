@@ -45,11 +45,11 @@ def test_cache_normal_use_sequence(tmp_path_store):
     symbol = "xyz"
     assert not tmp_path_store.exists(symbol)
 
-    tmp_path_store.write(symbol, SAMPLE_DF)
+    tmp_path_store.write(symbol, history.SymbolHistoryWriter(SAMPLE_DF))
 
     assert tmp_path_store.exists(symbol)
 
-    reloaded = tmp_path_store.read(symbol)
+    reloaded = tmp_path_store.read(symbol, history.SymbolHistoryReader())
 
     print(reloaded.head(3))
     print(SAMPLE_DF.head(3))
@@ -78,7 +78,9 @@ def test_history(data_source, tmp_path_store):
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
-    caching_download = history.CachingDownloader(data_source, tmp_path_store)
+    caching_download = history.CachingDownloader(
+        data_source, tmp_path_store, history.SymbolHistoryWriter
+    )
 
     response = caching_download(partial_symbol_set)
     assert len(response) == len(partial_symbol_set)
@@ -105,5 +107,5 @@ def test_history(data_source, tmp_path_store):
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    load = history.CachingLoader(data_source, tmp_path_store)
+    load = history.CachingSymbolHistoryLoader(data_source, tmp_path_store)
     load("pqr")
