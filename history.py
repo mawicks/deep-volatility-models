@@ -13,20 +13,36 @@ import utils
 logging.basicConfig(level=logging.INFO)
 
 
-def read_symbol_history(f: BinaryIO) -> pd.DataFrame:
-    df = pd.read_csv(
-        f,
-        index_col="date",
-        parse_dates=["date"],
-    )
-    df.sort_index(inplace=True)
-    return df
+def SymbolHistoryReader() -> Callable[[BinaryIO], pd.DataFrame]:
+    """
+    Constructs a reader() function that will read symbol history from an open
+    file-like object.
+
+    Returns:
+        Callable[BinaryIO, pd.DataFrame] - Reader that whenn called on an open
+        file returns a history dataframe.
+    """
+
+    def read_symbol_history(f: BinaryIO) -> pd.DataFrame:
+        df = pd.read_csv(
+            f,
+            index_col="date",
+            parse_dates=["date"],
+        )
+
+        df.sort_index(inplace=True)
+        return df
+
+    return read_symbol_history
 
 
-def write_symbol_history(f: BinaryIO, df: pd.DataFrame) -> None:
-    df = df.reset_index().set_index("date")
-    df.sort_index(inplace=True)
-    df.to_csv(f, index=True)
+def SymbolHistoryWriter(df: pd.DataFrame) -> Callable[[BinaryIO], None]:
+    def write_symbol_history(f: BinaryIO) -> None:
+        indexed_df = df.reset_index().set_index("date")
+        indexed_df.sort_index(inplace=True)
+        indexed_df.to_csv(f, index=True)
+
+    return write_symbol_history
 
 
 class FileSystemStore(object):
@@ -77,8 +93,9 @@ class FileSystemStore(object):
         Returns:
             None
         """
+        writer = SymbolHistoryWriter(df)
         with open(self._path(symbol), "wb") as f:
-            write_symbol_history(f, df)
+            writer(f)
 
     def read(self, symbol: str) -> pd.DataFrame:
         """
@@ -88,8 +105,9 @@ class FileSystemStore(object):
         Returns:
             pd.DataFrame - The associated dataframe.
         """
+        reader = SymbolHistoryReader()
         with open(self._path(symbol), "rb") as f:
-            df = read_symbol_history(f)
+            df = reader(f)
         return df
 
 

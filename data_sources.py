@@ -69,7 +69,7 @@ def YFinanceSource():
 
 if __name__ == "__main__":  # pragma: no cover
     symbols = ["spy", "qqq"]
-    ds = YFinanceSourceFactory()
+    ds = YFinanceSource()
     response = ds(symbols)
 
     for k, v in response.items():
