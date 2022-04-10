@@ -25,14 +25,6 @@ SAMPLE_PATH = "any_path"
 
 
 @pytest.fixture
-def tmp_path_store(tmp_path):
-    """
-    Create an instance of CSVFileSystemCache for testing
-    """
-    return history.FileSystemStore(os.fspath(tmp_path))
-
-
-@pytest.fixture
 def data_source():
     """
     Create an instance of a data source for testing
@@ -41,26 +33,40 @@ def data_source():
     return mock_data_source
 
 
-def test_cache_normal_use_sequence(tmp_path_store):
-    symbol = "xyz"
-    assert not tmp_path_store.exists(symbol)
+def test_symbol_history_reader_and_writer(tmp_path):
+    filename = os.path.join(tmp_path, "foo.csv")
 
-    tmp_path_store.write(symbol, history.SymbolHistoryWriter(SAMPLE_DF))
+    # Use writer to write outSAMPLE_df
+    writer = history.SymbolHistoryWriter(SAMPLE_DF)
+    with open(filename, "wb") as f:
+        writer(f)
 
-    assert tmp_path_store.exists(symbol)
+    # Use reader to read it back and compare the results.
+    reader = history.SymbolHistoryReader()
+    with open(filename, "rb") as f:
+        loaded_df = reader(f)
 
-    reloaded = tmp_path_store.read(symbol, history.SymbolHistoryReader())
-
-    print(reloaded.head(3))
-    print(SAMPLE_DF.head(3))
-    assert (reloaded == SAMPLE_DF).all().all()
+    assert (loaded_df == SAMPLE_DF).all().all()
 
 
-def test_check_cache_exists_path(tmp_path_store):
+def test_file_system_store(tmp_path):
+    symbol = "FOO"
+    store = history.FileSystemStore(tmp_path)
+    assert not store.exists(symbol)
+
+    store.write("FOO", history.SymbolHistoryWriter(SAMPLE_DF))
+    assert store.exists("FOO")
+
+    loaded_df = store.read(symbol, history.SymbolHistoryReader())
+    assert (loaded_df == SAMPLE_DF).all().all()
+
+
+def test_check_cache_exists_path(tmp_path):
     """
     Check that the os.path.exists() gets called with the correct path
     and check that exists is not case sensitive.
     """
+    tmp_path_store = history.FileSystemStore(tmp_path)
     with patch("history.os.path.exists") as os_path_exists:
         tmp_path_store.exists("symbol1")
         os_path_exists.assert_called_with(
@@ -73,11 +79,12 @@ def test_check_cache_exists_path(tmp_path_store):
         )
 
 
-def test_history(data_source, tmp_path_store):
+def test_history(data_source, tmp_path):
     partial_symbol_set = set(["ABC", "DEF"])
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
+    tmp_path_store = history.FileSystemStore(tmp_path)
     caching_download = history.CachingDownloader(
         data_source, tmp_path_store, history.SymbolHistoryWriter
     )
