@@ -49,7 +49,7 @@ def test_cache_normal_use_sequence(tmp_path_store):
 
     assert tmp_path_store.exists(symbol)
 
-    reloaded = tmp_path_store.load(symbol)
+    reloaded = tmp_path_store.read(symbol)
 
     print(reloaded.head(3))
     print(SAMPLE_DF.head(3))

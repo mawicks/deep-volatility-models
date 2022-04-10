@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Callable, Dict, Iterable, Union
+from typing import Callable, Dict, BinaryIO, Iterable, Union
 
 # Third party libraries
 import pandas as pd
@@ -11,6 +11,22 @@ import utils
 
 # Initialization
 logging.basicConfig(level=logging.INFO)
+
+
+def read_symbol_history(f: BinaryIO) -> pd.DataFrame:
+    df = pd.read_csv(
+        f,
+        index_col="date",
+        parse_dates=["date"],
+    )
+    df.sort_index(inplace=True)
+    return df
+
+
+def write_symbol_history(f: BinaryIO, df: pd.DataFrame) -> None:
+    df = df.reset_index().set_index("date")
+    df.sort_index(inplace=True)
+    df.to_csv(f, index=True)
 
 
 class FileSystemStore(object):
@@ -61,24 +77,19 @@ class FileSystemStore(object):
         Returns:
             None
         """
-        df = df.reset_index().set_index("date")
-        df.sort_index(inplace=True)
-        df.to_csv(self._path(symbol), index=True)
+        with open(self._path(symbol), "wb") as f:
+            write_symbol_history(f, df)
 
-    def load(self, symbol: str) -> pd.DataFrame:
+    def read(self, symbol: str) -> pd.DataFrame:
         """
-        Load a dataframe given its symbol.
+        Read a dataframe given its symbol.
         Arguments:
             symbol: str
         Returns:
             pd.DataFrame - The associated dataframe.
         """
-        df = pd.read_csv(
-            self._path(symbol),
-            index_col="date",
-            parse_dates=["date"],
-        )
-        df.sort_index(inplace=True)
+        with open(self._path(symbol), "rb") as f:
+            df = read_symbol_history(f)
         return df
 
 
@@ -172,7 +183,7 @@ def CachingLoader(data_source, data_store):
 
         dataframes = []
         for symbol in symbols:
-            df = data_store.load(symbol)
+            df = data_store.read(symbol)
             df["symbol"] = symbol
             dataframes.append(df)
 
