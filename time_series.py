@@ -146,7 +146,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
         sequence_length: int,
         stride: int = 1,
         create_channel_dim: bool = False,
-        dtype: type = torch.float,
+        dtype: torch.dtype = torch.float,
     ):
         if stride <= 0:
             raise ValueError("Stride cannot be negative")

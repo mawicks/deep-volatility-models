@@ -1,7 +1,7 @@
 import pytest
 
 # Local modules
-import utils
+import lutils
 
 
 @pytest.mark.parametrize(
@@ -18,7 +18,7 @@ import utils
     ],
 )
 def test_is_sorted(l, expected):
-    assert utils.is_sorted(l) == expected
+    assert lutils.is_sorted(l) == expected
 
 
 @pytest.mark.parametrize(
@@ -34,7 +34,7 @@ def test_is_sorted(l, expected):
 def test_to_symbol_list(test_input, expected_output):
     print(f"test input: {test_input}")
     print(f"expected output: {expected_output}")
-    assert utils.to_symbol_list(test_input) == expected_output
+    assert lutils.to_symbol_list(test_input) == expected_output
 
 
 @pytest.mark.parametrize(
@@ -49,4 +49,4 @@ def test_to_symbol_list(test_input, expected_output):
 def test_rename_column(test_input, expected_output):
     print(f"test input: {test_input}")
     print(f"expected output: {expected_output}")
-    assert utils.rename_column(test_input) == expected_output
+    assert lutils.rename_column(test_input) == expected_output

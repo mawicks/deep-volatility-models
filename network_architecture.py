@@ -1,4 +1,4 @@
-from matplotlib import use
+import torch
 import torch.nn
 
 # Mixture tuning parametrers
@@ -84,7 +84,7 @@ class TimeSeriesFeatures(torch.nn.Module):
 
     @property
     def window_size(self):
-        return self._window_size
+        return int(self._window_size)
 
     def __init__(
         self,
@@ -103,7 +103,7 @@ class TimeSeriesFeatures(torch.nn.Module):
         if window_size == 0 and exogenous_dimension == 0:
             raise ValueError("window_size and exogenous_dimension cannot both be zero.")
 
-        self.__setattr__("_window_size", window_size)
+        self.__setattr__("_window_size", torch.tensor(window_size))
 
         def conv_block(input_channels, width):
             return [

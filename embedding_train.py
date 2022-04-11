@@ -6,17 +6,19 @@ import os.path
 # Common packages
 import click
 import numpy as np
-import pandas as pd
+
 import torch
-import yfinance as yf
+import torch.utils
+import torch.utils.data
+import torch.utils.data.dataloader
 
 # Local imports
 import data_sources
-import history
+import price_history
 import mixture_model_stats
 import time_series
 import models
-import network
+import network_architecture
 
 TRAIN_FRACTION = 0.80
 SEED = 24  # 42
@@ -64,7 +66,7 @@ def get_model(
     mixture_components=DEFAULT_MIXTURE_COMPONENTS,
     model_file=None,
 ):
-    default_network_class = network.MixtureModel
+    default_network_class = network_architecture.MixtureModel
 
     try:
         model = torch.load(model_file)
@@ -188,9 +190,9 @@ def main(
     splits_by_symbol = {}
     symbol_encoding_dict = {}
 
-    data_store = history.FileSystemStore("training_data")
+    data_store = price_history.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    history_loader = history.CachingSymbolHistoryLoader(data_source, data_store)
+    history_loader = price_history.CachingSymbolHistoryLoader(data_source, data_store)
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i
@@ -238,6 +240,11 @@ def main(
     )
 
     best_test_loss = float("inf")
+
+    best_epoch = -1
+    log_p = mu = inv_sigma = torch.tensor(
+        []
+    )  # This is here mainly to keep type checker and linter happy.
 
     for e in range(EPOCHS):
         epoch_losses = []
@@ -288,8 +295,8 @@ def main(
             # To debug Nans, uncomment following line:
             # with torch.autograd.detect_anomaly():
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                parameters, MAX_GRADIENT_NORM, norm_type="inf"
+            torch.nn.utils.clip_grad.clip_grad_norm_(
+                parameters, MAX_GRADIENT_NORM, norm_type=float("inf")
             )
             optim.step()
 

@@ -1,5 +1,5 @@
-import logging
 import io
+import logging
 import os
 from typing import Any, Callable, Dict, BinaryIO, Iterable, Union
 
@@ -14,7 +14,7 @@ import lutils
 logging.basicConfig(level=logging.INFO)
 
 
-def SymbolHistoryReader() -> Callable[[BinaryIO], pd.DataFrame]:
+def SymbolHistoryReader() -> Callable[[io.BufferedReader], pd.DataFrame]:
     """
     Constructs a reader() function that will read symbol history from an open
     file-like object.
@@ -24,7 +24,7 @@ def SymbolHistoryReader() -> Callable[[BinaryIO], pd.DataFrame]:
         file returns a history dataframe.
     """
 
-    def read_symbol_history(f: BinaryIO) -> pd.DataFrame:
+    def read_symbol_history(f: io.BufferedReader) -> pd.DataFrame:
         df = pd.read_csv(
             f,
             index_col="date",
@@ -93,7 +93,7 @@ class FileSystemStore(object):
         """
         return os.path.exists(self._path(symbol))
 
-    def write(self, symbol: str, writer: Callable[[BinaryIO], None]):
+    def write(self, symbol: str, writer: Callable[[io.BufferedWriter], None]):
         """
         Write a key and data (must be a dataframe) to the data store
         Arguments:
@@ -105,7 +105,7 @@ class FileSystemStore(object):
         with open(self._path(symbol), "wb") as f:
             writer(f)
 
-    def read(self, symbol: str, reader: Callable[[BinaryIO], object]) -> Any:
+    def read(self, symbol: str, reader: Callable[[io.BufferedReader], Any]) -> Any:
         """
         Read a dataframe given its symbol.
         Arguments:

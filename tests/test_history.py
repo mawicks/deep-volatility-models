@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pandas as pd
 
 # Local imports
-import utils
-import history
+import lutils
+import price_history
 
 
 SAMPLE_DF = pd.DataFrame(
@@ -39,10 +39,10 @@ def test_symbol_history_reader_and_writer(tmp_path):
 
     # But first, intentionally reverse the order of dates.
     sample_copy = SAMPLE_DF.reset_index().sort_values("date", ascending=False)
-    assert not utils.is_sorted(sample_copy.date)
+    assert not lutils.is_sorted(sample_copy.date)
 
     # Define a helper to simplify writing slightly different versions of SAMEPLE_DF
-    reader = history.SymbolHistoryReader()
+    reader = price_history.SymbolHistoryReader()
 
     def check(writer):
         with open(filename, "wb") as f:
@@ -53,22 +53,22 @@ def test_symbol_history_reader_and_writer(tmp_path):
             loaded_df = reader(f)
 
         assert loaded_df.index.name == "date"
-        assert utils.is_sorted(loaded_df.index)
+        assert lutils.is_sorted(loaded_df.index)
         assert (loaded_df == SAMPLE_DF).all().all()
 
     for df in [sample_copy, sample_copy.set_index("date")]:
-        check(history.SymbolHistoryWriter(df))
+        check(price_history.SymbolHistoryWriter(df))
 
 
 def test_file_system_store(tmp_path):
     symbol = "FOO"
-    store = history.FileSystemStore(tmp_path)
+    store = price_history.FileSystemStore(tmp_path)
     assert not store.exists(symbol)
 
-    store.write("FOO", history.SymbolHistoryWriter(SAMPLE_DF))
+    store.write("FOO", price_history.SymbolHistoryWriter(SAMPLE_DF))
     assert store.exists("FOO")
 
-    loaded_df = store.read(symbol, history.SymbolHistoryReader())
+    loaded_df = store.read(symbol, price_history.SymbolHistoryReader())
     assert (loaded_df == SAMPLE_DF).all().all()
 
 
@@ -77,8 +77,8 @@ def test_check_cache_exists_path(tmp_path):
     Check that the os.path.exists() gets called with the correct path
     and check that exists is not case sensitive.
     """
-    tmp_path_store = history.FileSystemStore(tmp_path)
-    with patch("history.os.path.exists") as os_path_exists:
+    tmp_path_store = price_history.FileSystemStore(tmp_path)
+    with patch("price_history.os.path.exists") as os_path_exists:
         tmp_path_store.exists("symbol1")
         os_path_exists.assert_called_with(
             os.path.join(tmp_path_store.cache_dir, "symbol1.csv")
@@ -95,9 +95,9 @@ def test_history(data_source, tmp_path):
     missing_symbol_set = set(["GHI", "JKL"])
     full_symbol_set = partial_symbol_set.union(missing_symbol_set)
 
-    tmp_path_store = history.FileSystemStore(tmp_path)
-    caching_download = history.CachingDownloader(
-        data_source, tmp_path_store, history.SymbolHistoryWriter
+    tmp_path_store = price_history.FileSystemStore(tmp_path)
+    caching_download = price_history.CachingDownloader(
+        data_source, tmp_path_store, price_history.SymbolHistoryWriter
     )
 
     response = caching_download(partial_symbol_set)
@@ -125,5 +125,5 @@ def test_history(data_source, tmp_path):
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    load = history.CachingSymbolHistoryLoader(data_source, tmp_path_store)
+    load = price_history.CachingSymbolHistoryLoader(data_source, tmp_path_store)
     load("pqr")
