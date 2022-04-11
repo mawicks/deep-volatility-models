@@ -14,7 +14,7 @@ import torch.utils.data.dataloader
 
 # Local imports
 import data_sources
-import price_history
+import stock_data
 import mixture_model_stats
 import time_series
 import models
@@ -190,9 +190,9 @@ def main(
     splits_by_symbol = {}
     symbol_encoding_dict = {}
 
-    data_store = price_history.FileSystemStore("training_data")
+    data_store = stock_data.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    history_loader = price_history.CachingSymbolHistoryLoader(data_source, data_store)
+    history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i
