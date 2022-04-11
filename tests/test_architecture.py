@@ -2,7 +2,7 @@ import pytest
 
 import torch
 
-import network_architecture
+import architecture
 
 
 BATCH_SIZE = 5
@@ -12,7 +12,7 @@ logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 
 def test_min_max_clamping():
-    clamper = network_architecture.MinMaxClamping()
+    clamper = architecture.MinMaxClamping()
     x1 = torch.tensor([[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]])
     x2 = torch.tensor([[4.0, 7.0], [5.0, 8.0], [6.0, 9.0]])
     # Column 1 ranges from 1 to 6
@@ -36,7 +36,7 @@ def test_min_max_clamping():
 
 def test_untrained_mixmax_clamping_passes_all():
     MAGNITUDE = 1e6
-    filter = network_architecture.MinMaxClamping()
+    filter = architecture.MinMaxClamping()
     filter.train(False)
     x = MAGNITUDE * torch.randn(3, 2)
     y = filter(x)
@@ -45,7 +45,7 @@ def test_untrained_mixmax_clamping_passes_all():
 
 def test_gaussian_noise():
     SIGMA = 0.1
-    noise = network_architecture.GaussianNoise(SIGMA)
+    noise = architecture.GaussianNoise(SIGMA)
     x = torch.tensor([[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]])
     y = noise(x)
     error = x - y
@@ -113,24 +113,24 @@ def test_mixture_model(
     """
     if expect_value_error:
         with pytest.raises(ValueError):
-            g = network_architecture.MixtureModel(
+            g = architecture.MixtureModel(
                 window_size,
                 input_symbols,
                 output_symbols,
                 exogenous_dimension=exogenous_dim,
-                output_head_type=network_architecture.MultivariateHead,
+                output_head_type=architecture.MultivariateHead,
                 feature_dimension=feature_dim,
                 mixture_components=mixture_components,
                 extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
             )
     else:
-        g = network_architecture.MixtureModel(
+        g = architecture.MixtureModel(
             window_size,
             input_symbols,
             output_symbols,
             exogenous_dimension=exogenous_dim,
-            output_head_type=network_architecture.MultivariateHead,
+            output_head_type=architecture.MultivariateHead,
             feature_dimension=feature_dim,
             mixture_components=mixture_components,
             extra_mixing_layers=extra_mixing_layers,
@@ -166,12 +166,12 @@ def test_mixture_model(
     "head_class, batch_size, input_symbols, output_symbols, feature_dim,"
     "mixture_components, expect_value_error",
     [
-        (network_architecture.MultivariateHead, 13, 3, None, 5, 7, False),
-        (network_architecture.MultivariateHead, 13, 3, 3, 5, 7, False),
-        (network_architecture.MultivariateHead, 13, 3, 2, 5, 7, False),
-        (network_architecture.UnivariateHead, 13, 1, 1, 5, 7, False),
-        (network_architecture.UnivariateHead, 13, 3, None, 5, 7, True),
-        (network_architecture.UnivariateHead, 13, 3, 3, 5, 7, True),
+        (architecture.MultivariateHead, 13, 3, None, 5, 7, False),
+        (architecture.MultivariateHead, 13, 3, 3, 5, 7, False),
+        (architecture.MultivariateHead, 13, 3, 2, 5, 7, False),
+        (architecture.UnivariateHead, 13, 1, 1, 5, 7, False),
+        (architecture.UnivariateHead, 13, 3, None, 5, 7, True),
+        (architecture.UnivariateHead, 13, 3, 3, 5, 7, True),
     ],
 )
 def test_head_classes(

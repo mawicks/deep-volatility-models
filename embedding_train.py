@@ -18,7 +18,7 @@ import price_history
 import mixture_model_stats
 import time_series
 import models
-import network_architecture
+import architecture
 
 TRAIN_FRACTION = 0.80
 SEED = 24  # 42
@@ -66,7 +66,7 @@ def get_model(
     mixture_components=DEFAULT_MIXTURE_COMPONENTS,
     model_file=None,
 ):
-    default_network_class = network_architecture.MixtureModel
+    default_network_class = architecture.MixtureModel
 
     try:
         model = torch.load(model_file)
