@@ -8,7 +8,7 @@ import pandas as pd
 
 # Local imports
 import data_sources
-import lutils
+import util
 
 # Initialization
 logging.basicConfig(level=logging.INFO)
@@ -148,7 +148,7 @@ def CachingDownloader(
             they already exist in the cache.
         """
         # Handle the case where `symbol`is a single symbol
-        symbols = lutils.to_symbol_list(symbols)
+        symbols = util.to_symbol_list(symbols)
 
         if not overwrite_existing:
             # Determine what's missing
@@ -205,7 +205,7 @@ def CachingLoader(data_source, data_store, reader_factory, writer_factory):
                 and the second position is the value of interest (e.g., "close", "log_return", etc.)
 
         <"""
-        symbols = lutils.to_symbol_list(symbols)
+        symbols = util.to_symbol_list(symbols)
         caching_download(symbols, overwrite_existing)
 
         dataframes = []

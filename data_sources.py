@@ -8,7 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 # Local modules
-import lutils
+import util
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,7 +32,7 @@ def YFinanceSource():
 
     def _add_columns(df):
         new_df = df.dropna().reset_index()
-        rename_dict = {c: lutils.rename_column(c) for c in new_df.columns}
+        rename_dict = {c: util.rename_column(c) for c in new_df.columns}
         log_return = np.log(new_df["Adj Close"] / new_df["Adj Close"].shift(1))
         new_df = new_df.assign(log_return=log_return)
         new_df.rename(columns=rename_dict, inplace=True)
@@ -42,7 +42,7 @@ def YFinanceSource():
     def price_history(symbol_set: Union[Iterable[str], str]) -> Dict[str, pd.DataFrame]:
 
         # Convert symbol_set to a list
-        symbols = lutils.to_symbol_list(symbol_set)
+        symbols = util.to_symbol_list(symbol_set)
 
         # Do the download
         df = yf.download(

@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pandas as pd
 
 # Local imports
-import lutils
+import util
 import price_history
 
 
@@ -39,7 +39,7 @@ def test_symbol_history_reader_and_writer(tmp_path):
 
     # But first, intentionally reverse the order of dates.
     sample_copy = SAMPLE_DF.reset_index().sort_values("date", ascending=False)
-    assert not lutils.is_sorted(sample_copy.date)
+    assert not util.is_sorted(sample_copy.date)
 
     # Define a helper to simplify writing slightly different versions of SAMEPLE_DF
     reader = price_history.SymbolHistoryReader()
@@ -53,7 +53,7 @@ def test_symbol_history_reader_and_writer(tmp_path):
             loaded_df = reader(f)
 
         assert loaded_df.index.name == "date"
-        assert lutils.is_sorted(loaded_df.index)
+        assert util.is_sorted(loaded_df.index)
         assert (loaded_df == SAMPLE_DF).all().all()
 
     for df in [sample_copy, sample_copy.set_index("date")]:
