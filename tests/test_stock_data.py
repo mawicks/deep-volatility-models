@@ -125,5 +125,7 @@ def test_history(data_source, tmp_path):
     assert len(response) == 0
 
     # Try loading one of the downloaded files
-    load = stock_data.CachingSymbolHistoryLoader(data_source, tmp_path_store)
-    load("pqr")
+    loader = stock_data.CachingSymbolHistoryLoader(data_source, tmp_path_store)
+    # load("pqr")
+    combiner = stock_data.PriceHistoryConcatenator()
+    combiner(loader("pqr"))

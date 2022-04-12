@@ -1,7 +1,9 @@
+import abc
+
 import io
 import logging
 import os
-from typing import Any, Callable, Dict, BinaryIO, Iterable, Union
+from typing import Any, Callable, Dict, Iterable, Tuple, Union
 
 # Third party libraries
 import pandas as pd
@@ -13,8 +15,33 @@ import util
 # Initialization
 logging.basicConfig(level=logging.INFO)
 
+# This section defines the types that we will be using.
 
-def SymbolHistoryReader() -> Callable[[io.BufferedReader], pd.DataFrame]:
+Reader = Callable[[io.BufferedReader], pd.DataFrame]
+Writer = Callable[[io.BufferedWriter], None]
+Concatenator = Callable[[Iterable[Tuple[str, pd.DataFrame]]], pd.DataFrame]
+ReaderFactory = Callable[[], Reader]
+WriterFactory = Callable[[Any], Writer]
+
+
+class DataStore(abc.ABC):
+    @abc.abstractmethod
+    def exists(self, key: str) -> bool:
+        """Does data for `key` exist in the data store?"""
+
+    @abc.abstractmethod
+    def read(self, key: str, reader: Reader) -> Any:
+        """Read data for `key` from the data store"""
+
+    @abc.abstractmethod
+    def write(self, key: str, writer: Writer) -> None:
+        """Write the data to the data store under `key`"""
+
+
+# Here's an iplementation of a Reader
+
+
+def SymbolHistoryReader() -> Reader:
     """
     Constructs a reader() function that will read symbol history from an open
     file-like object.
@@ -39,7 +66,10 @@ def SymbolHistoryReader() -> Callable[[io.BufferedReader], pd.DataFrame]:
     return read_symbol_history
 
 
-def SymbolHistoryWriter(df: pd.DataFrame) -> Callable[[io.BufferedWriter], None]:
+# Here's an iplementation of a Writer
+
+
+def SymbolHistoryWriter(df: pd.DataFrame) -> Writer:
     def write_symbol_history(f: io.BufferedWriter) -> None:
         # Create an index on date and write to CSV in ascending order by date
         # with index=True
@@ -54,7 +84,10 @@ def SymbolHistoryWriter(df: pd.DataFrame) -> Callable[[io.BufferedWriter], None]
     return write_symbol_history
 
 
-class FileSystemStore(object):
+# Here's an iplementation of a DataStore
+
+
+class FileSystemStore(DataStore):
     """
     This clsss implements an abstract interface for data storage.  It
     implements three methods:
@@ -93,7 +126,7 @@ class FileSystemStore(object):
         """
         return os.path.exists(self._path(symbol))
 
-    def write(self, symbol: str, writer: Callable[[io.BufferedWriter], None]):
+    def write(self, symbol: str, writer: Writer):
         """
         Write a key and data (must be a dataframe) to the data store
         Arguments:
@@ -105,7 +138,7 @@ class FileSystemStore(object):
         with open(self._path(symbol), "wb") as f:
             writer(f)
 
-    def read(self, symbol: str, reader: Callable[[io.BufferedReader], Any]) -> Any:
+    def read(self, symbol: str, reader: Reader) -> Any:
         """
         Read a dataframe given its symbol.
         Arguments:
@@ -119,9 +152,9 @@ class FileSystemStore(object):
 
 
 def CachingDownloader(
-    data_source: Callable[[Union[str, Iterable[str]]], Dict[str, pd.DataFrame]],
-    data_store: FileSystemStore,
-    writer_factory,
+    data_source: data_sources.DataSource,
+    data_store: DataStore,
+    writer_factory: WriterFactory,
 ):
     """
     Construct and return a download function that will download and write the
@@ -138,7 +171,8 @@ def CachingDownloader(
     """
 
     def download(
-        symbols: Union[Iterable[str], str], overwrite_existing: bool = False
+        symbols: Union[Iterable[str], str],
+        overwrite_existing: bool = False,
     ) -> Dict[str, pd.DataFrame]:
         """
         Arguments:
@@ -175,53 +209,90 @@ def CachingDownloader(
     return download
 
 
-def CachingLoader(data_source, data_store, reader_factory, writer_factory):
+def PriceHistoryConcatenator() -> Concatenator:
+    def concatenator(sequence: Iterable[Tuple[str, pd.DataFrame]]) -> pd.DataFrame:
+        """
+        Return a dataframe containing all historic values for the given set of symbosl.
+        The dates are inner joined so there is one row for each date where all symbols
+        have a value for that date.  The row index for the returned dataframe is the
+        date.  The column is a muli-level index where the first position is the symbol
+        and the second position is the value of interest (e.g., "close", "log_return", etc.)
+
+        The expected use case is to get the log returns for a portfolio of stocks.  For example,
+        the following returns a datafram of log returns for a portfolio on the dates where every
+        item in the portfolio has a return:
+
+        df.loc[:, (symbol_list, 'log_return')]
+
+        This is intended for a portfolio, but you can specify just one stock if that's all that's required:
+
+        df.loc[:, (symbol, 'log_return')]
+
+        Arguments:
+            symbols:  Union[Iterable[str], str] - a list of symbols of interest
+            overwrite_existing: bool - whether to overwrite previously downloaded data (default False)
+
+        Returns
+            pd.DataFrame - The column is a muli-level index where the first position is the symbol
+            and the second position is the value of interest (e.g., "close", "log_return", etc.)
+        """
+        dataframes = []
+        symbols = []
+        for symbol, df in sequence:
+            df["symbol"] = symbol
+            symbols.append(symbol)
+            dataframes.append(df)
+
+        combined_df = pd.concat(dataframes, axis=1, join="inner", keys=symbols)
+        return combined_df
+
+    return concatenator
+
+
+def CachingLoader(
+    data_source: data_sources.DataSource,
+    data_store: DataStore,
+    reader_factory: ReaderFactory,
+    writer_factory: WriterFactory,
+):
+    """
+    Construct a caching downloader frmo a data source, data store, reader
+    factory and writer factory.  The resulting caching downloader is called on a
+    list of symbols and returns a generator that lazily returns a sequence of
+    typles of (symbol, data).  The data_source is invoked only for elements that
+    do not already exist in `data_store`.  A reader instance generated from
+    reader_factory is used to read the data.  The type of the reader output can
+    be anything, but typically could be a pd.DataFrame.  A writer is used to
+    write the data to the data store (in a format that the reader can read it)
+    after being downloaded from the data_source.
+
+    See the sample code below for an example of these are glued together.
+    """
     caching_download = CachingDownloader(data_source, data_store, writer_factory)
 
     def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> Any:
-        """
-                Return a dataframe containing all historic values for the given set of symbosl.
-                The dates are inner joined so there is one row for each date where all symbols
-                have a value for that date.  The row index for the returned dataframe is the
-                date.  The column is a muli-level index where the first position is the symbol
-                and the second position is the value of interest (e.g., "close", "log_return", etc.)
-
-                The expected use case is to get the log returns for a portfolio of stocks.  For example,
-                the following returns a datafram of log returns for a portfolio on the dates where every
-                item in the portfolio has a return:
-
-                df.loc[:, (symbol_list, 'log_return')]
-
-                This is intended for a portfolio, but you can specify just one stock if that's all that's required:
-
-                df.loc[:, (symbol, 'log_return')]
-
-                Arguments:
-                   symbols:  Union[Iterable[str], str] - a list of symbols of interst
-                   overwrite_existing: bool - whether to overwrite previously downloaded data (default False)
-
-                Returns
-                   pd.DataFrame - The column is a muli-level index where the first position is the symbol
-                and the second position is the value of interest (e.g., "close", "log_return", etc.)
-
-        <"""
+        """ """
         symbols = util.to_symbol_list(symbols)
         caching_download(symbols, overwrite_existing)
 
-        dataframes = []
         reader = reader_factory()
         for symbol in symbols:
-            df = data_store.read(symbol, reader)
-            df["symbol"] = symbol
-            dataframes.append(df)
-
-        print(dataframes)
-        return pd.concat(dataframes, axis=1, join="inner", keys=symbols)
+            data = data_store.read(symbol, reader)
+            yield (symbol, data)
 
     return load
 
 
-def CachingSymbolHistoryLoader(data_source, data_store):
+def CachingSymbolHistoryLoader(
+    data_source: data_sources.DataSource,
+    data_store: DataStore,
+):
+    """
+    This loader factory returns an instance of a loader that handles the typical
+    use-case where we're interested in DataFrames containing history for a
+    particular stock symbol.  It's the special case of a CachingLoader that
+    knows how to read and write symbol histories as DataFrames.
+    """
     return CachingLoader(
         data_source, data_store, SymbolHistoryReader, SymbolHistoryWriter
     )
@@ -230,14 +301,15 @@ def CachingSymbolHistoryLoader(data_source, data_store):
 if __name__ == "__main__":  # pragma: no cover
     data_store = FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    load = CachingSymbolHistoryLoader(data_source, data_store)
-    symbols = ["QQQ", "SPY", "BND", "EDV"]
-    df = load(symbols, overwrite_existing=False)
+    loader = CachingSymbolHistoryLoader(data_source, data_store)
+    combiner = PriceHistoryConcatenator()
+    symbols = ("QQQ", "SPY", "BND", "EDV")
+    df = combiner(loader(symbols, overwrite_existing=False))
 
-    selection = df.loc[:, (symbols, "log_return")]
+    selection = df.loc[:, (symbols, "log_return")]  # type: ignore
     print(selection)
     print(selection.values.shape)
 
-    selection = df.loc[:, (symbols[0], "log_return")]
+    selection = df.loc[:, (symbols[0], "log_return")]  # type: ignore
     print(selection)
     print(selection.values.shape)

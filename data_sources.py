@@ -1,6 +1,6 @@
 import logging
 
-from typing import Dict, Iterable, Union
+from typing import Callable, Dict, Iterable, Union
 
 # Third party modules
 import numpy as np
@@ -11,6 +11,8 @@ import yfinance as yf
 import util
 
 logging.basicConfig(level=logging.INFO)
+
+DataSource = Callable[[Union[str, Iterable[str]]], Dict[str, pd.DataFrame]]
 
 
 def YFinanceSource():

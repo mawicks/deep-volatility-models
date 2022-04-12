@@ -103,7 +103,9 @@ class TimeSeriesFeatures(torch.nn.Module):
         if window_size == 0 and exogenous_dimension == 0:
             raise ValueError("window_size and exogenous_dimension cannot both be zero.")
 
-        self.__setattr__("_window_size", torch.tensor(window_size))
+        self._window_size = torch.nn.parameter.Parameter(
+            torch.tensor(window_size), requires_grad=False
+        )
 
         def conv_block(input_channels, width):
             return [
