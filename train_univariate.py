@@ -101,7 +101,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
         # (see stock-data.py).)
         symbol_history = next(history_loader(s, overwrite_existing=refresh))[1]
 
-        # Symbol history is a combined history for all symbosl.  We process it
+        # Symbol history is a combined history for all symbols.  We process it
         # one symbols at a time, so get the log returns for the current symbol
         # of interest.
         # log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
@@ -110,7 +110,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
             1 + window_size,
             create_channel_dim=True,
         )
-        print(windowed_returns[0])
+        print("windowed_returns[0]: ", windowed_returns[0])
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
@@ -144,7 +144,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
 
 
 def batch_output(model_network, embeddings, batch):
-    encoding, window, true_values = batch
+    (encoding, window), true_values = batch
     window = window.to(device)
     encoding = encoding.to(device)
     true_values = true_values.to(device)

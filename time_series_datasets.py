@@ -242,6 +242,6 @@ class EncodingContextWindowAndTarget(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.__symbol_history_dataset)
 
-    def __getitem__(self, i) -> Tuple[int, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, i) -> Tuple[Tuple[int, torch.Tensor], torch.Tensor]:
         window, target = self.__symbol_history_dataset[i]
-        return self.__symbol_encoding, window, target
+        return (self.__symbol_encoding, window), target
