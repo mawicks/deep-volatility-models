@@ -188,6 +188,17 @@ def make_loss_function(model_network, embeddings, device):
     return loss_function
 
 
+def make_batch_logger(model_network, embeddings):
+    def log_batch_info(batch):
+        if batch:
+            log_p, mu, inv_sigma = batch_output(model_network, embeddings, batch)[:3]
+            print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
+            print("last batch mu:\n", mu[:6].detach().cpu().numpy())
+            print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
+
+    return log_batch_info
+
+
 @click.command()
 @click.option(
     "--model_file",
@@ -280,9 +291,10 @@ def main(
     log_p = mu = inv_sigma = torch.tensor([])
 
     loss_function = make_loss_function(model_network, embeddings, device)
+    batch_logger = make_batch_logger(model_network, embeddings)
 
     for e in range(EPOCHS):
-        epoch_losses = []
+        batch_lossees_train = []
 
         model_network.train()
 
@@ -302,40 +314,31 @@ def main(
             )
             optim.step()
 
-            epoch_losses.append(float(loss))
-
-        def log_progress(batch):
-            if batch:
-                log_p, mu, inv_sigma = batch_output(model_network, embeddings, batch)[
-                    :3
-                ]
-                print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
-                print("last batch mu:\n", mu[:6].detach().cpu().numpy())
-                print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
+            batch_lossees_train.append(float(loss))
 
         if e % EPOCH_SHOW_PROGRESS_INTERVAL == 0:
-            log_progress(batch)
+            batch_logger(batch)
 
         print(list(embeddings.parameters()))
 
-        train_loss = float(np.mean(epoch_losses))
-        print(f"epoch {e} train loss: {train_loss:.4f}")
+        epoch_loss_train = float(np.mean(batch_lossees_train))
+        print(f"epoch {e} train loss: {epoch_loss_train:.4f}")
 
         # Evalute the loss on the test set
-        test_epoch_losses = []
-        test_mean_errors = []
+        batch_losses_test = []
+        batch_mean_errors_test = []
 
         # Don't compute gradients
         with torch.no_grad():
             model_network.eval()
 
             for batch in test_loader:
-                test_batch_loss, test_mean_error = loss_function(batch)
-                test_epoch_losses.append(float(test_batch_loss))
-                test_mean_errors.append(float(test_mean_error))
+                batch_loss_test, epoch_mean_error_test = loss_function(batch)
+                batch_losses_test.append(float(batch_loss_test))
+                batch_mean_errors_test.append(float(epoch_mean_error_test))
 
-            test_loss = float(np.mean(test_epoch_losses))
-            test_mean_error = float(np.mean(test_mean_errors))
+            epoch_loss_test = float(np.mean(batch_losses_test))
+            epoch_mean_error_test = float(np.mean(batch_mean_errors_test))
 
             model = models.StockModelV2(
                 network=model_network,
@@ -343,10 +346,10 @@ def main(
                 epochs=e,
                 date=dt.datetime.now(),
                 null_model_loss=null_model_loss,
-                loss=test_loss,
+                loss=epoch_loss_test,
             )
-            if test_loss < best_test_loss:
-                best_test_loss = test_loss
+            if epoch_loss_test < best_test_loss:
+                best_test_loss = epoch_loss_test
                 best_epoch = e
                 flag = "**"
 
@@ -361,11 +364,9 @@ def main(
             else:
                 flag = "  "
             print(
-                f"\t   test log loss: {test_loss:.4f}  test mean error: {test_mean_error:.7f}"
+                f" {flag} epoch loss (test): {epoch_loss_test:.4f}  best epoch: {best_epoch}  best loss:({best_test_loss:.4f})) {flag}"
             )
-            print(
-                f"\t{flag} total test loss: {test_loss:.4f} (best epoch {best_epoch}: {best_test_loss:.4f}) {flag}"
-            )
+            print(f"    mean error (test): {epoch_mean_error_test:.7f}")
 
             torch.save(model, os.path.join(MODEL_ROOT, "last_embedding_model.pt"))
             torch.save(embeddings, os.path.join(MODEL_ROOT, "last_embeddings.pt"))
