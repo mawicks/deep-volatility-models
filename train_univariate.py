@@ -41,8 +41,8 @@ WEIGHT_DECAY = 5e-9  # 0.075
 
 null_model_loss = float("inf")
 
-CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
-MODEL_ROOT = os.path.join(CURRENT_PATH, "models")
+ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
+MODEL_ROOT = os.path.join(ROOT_PATH, "models")
 
 if torch.cuda.is_available():
     dev = "cuda:0"
@@ -51,7 +51,7 @@ else:
 device = torch.device(dev)
 
 
-def get_model(
+def load_or_create_model(
     window_size=DEFAULT_WINDOW_SIZE,
     mixture_components=DEFAULT_MIXTURE_COMPONENTS,
     model_file=None,
@@ -90,8 +90,8 @@ class SymbolDataset(torch.utils.data.Dataset):
         return len(self.__symbol_dataset)
 
     def __getitem__(self, i):
-        context, target = self.__symbol_dataset[i]
-        return self.__symbol_encoding, context, target
+        window, target = self.__symbol_dataset[i]
+        return self.__symbol_encoding, window, target
 
 
 @click.command()
@@ -142,7 +142,7 @@ def main(
     print(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
-    n_network, parameters = get_model(
+    n_network, parameters = load_or_create_model(
         window_size=window_size,
         mixture_components=mixture_components,
         model_file=model_file,
@@ -175,7 +175,7 @@ def main(
     splits_by_symbol = {}
     symbol_encoding_dict = {}
 
-    data_store = stock_data.FileSystemStore("training_data")
+    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
     data_source = data_sources.YFinanceSource()
     history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
     combiner = stock_data.PriceHistoryConcatenator()
@@ -233,15 +233,15 @@ def main(
     for e in range(EPOCHS):
         epoch_losses = []
 
-        for minibatch, (symbol_encoding, window_size, true_values) in enumerate(
+        for minibatch, (symbol_encoding, window, true_values) in enumerate(
             training_dataloader
         ):
-            window_size = window_size.to(device)
+            window = window.to(device)
             symbol_encoding = symbol_encoding.to(device)
             true_values = true_values.to(device)
 
             symbol_embedding = embeddings(symbol_encoding)
-            log_p, mu, inv_sigma = n_network(window_size, symbol_embedding)[:3]
+            log_p, mu, inv_sigma = n_network(window, symbol_embedding)[:3]
 
             mb_size, components, channels = mu.shape
             combined_mu = torch.sum(
@@ -312,17 +312,15 @@ def main(
                 # Use the model in eval() mode.
                 network_copy = copy.deepcopy(n_network).eval()
 
-                for minibatch, (symbol_encoding, window_size, true_values) in enumerate(
+                for minibatch, (symbol_encoding, window, true_values) in enumerate(
                     test_dataloader
                 ):
-                    window_size = window_size.to(device)
+                    window = window.to(device)
                     true_values = true_values.to(device)
                     symbol_encoding = symbol_encoding.to(device)
 
                     symbol_embedding = embeddings(symbol_encoding)
-                    log_p, mu, inv_sigma = network_copy(window_size, symbol_embedding)[
-                        :3
-                    ]
+                    log_p, mu, inv_sigma = network_copy(window, symbol_embedding)[:3]
 
                     mb_size, components, channels = mu.shape
                     combined_mu = torch.sum(
