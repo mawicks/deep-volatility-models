@@ -104,7 +104,7 @@ def test_rolling_window_arg_check():
 
 
 @pytest.mark.parametrize(
-    "series,window,stride,create_channel_dim,expected",
+    "series,window_size,stride,create_channel_dim,expected",
     [
         (
             range(10),
@@ -171,9 +171,11 @@ def test_rolling_window_arg_check():
         ),
     ],
 )
-def test_rolling_window_series(series, window, stride, create_channel_dim, expected):
+def test_rolling_window_series(
+    series, window_size, stride, create_channel_dim, expected
+):
     d = time_series.RollingWindow(
-        series, window, stride=stride, create_channel_dim=create_channel_dim
+        series, window_size, stride=stride, create_channel_dim=create_channel_dim
     )
     assert len(d) == len(expected)
 
