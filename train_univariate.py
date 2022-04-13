@@ -15,7 +15,7 @@ import torch.utils.data.dataloader
 import data_sources
 import stock_data
 import mixture_model_stats
-import time_series
+import time_series_datasets
 import models
 import architecture
 
@@ -172,15 +172,17 @@ def main(
 
         symbol_history = combiner(history_loader(s, overwrite_existing=refresh))
         log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
-        windowed_returns = time_series.RollingWindow(
+        windowed_returns = time_series_datasets.RollingWindow(
             log_returns,
             1 + window_size,
             create_channel_dim=True,
         )
         print(windowed_returns[0])
-        symbol_dataset = time_series.ContextWindowAndTarget(windowed_returns, 1)
-        symbol_dataset_with_encoding = time_series.EncodingContextWindowAndTarget(
-            i, symbol_dataset
+        symbol_dataset = time_series_datasets.ContextWindowAndTarget(
+            windowed_returns, 1
+        )
+        symbol_dataset_with_encoding = (
+            time_series_datasets.EncodingContextWindowAndTarget(i, symbol_dataset)
         )
 
         train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))

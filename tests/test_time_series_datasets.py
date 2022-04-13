@@ -4,7 +4,7 @@ import pytest
 import torch
 
 # Local modules
-import time_series
+import time_series_datasets
 
 
 # Constants used in tests.
@@ -77,7 +77,7 @@ array([[ 2,  3],
     ],
 )
 def test_multivariate_stats(series, mu_expected, l_expected):
-    mu, l = time_series.multivariate_stats(series)
+    mu, l = time_series_datasets.multivariate_stats(series)
     assert mu.shape == mu_expected.shape
     assert l.shape == l_expected.shape
     print(f"mu returned:\n{mu}")
@@ -93,10 +93,10 @@ def test_multivariate_stats(series, mu_expected, l_expected):
 
 def test_rolling_window_arg_check():
     with pytest.raises(ValueError):
-        time_series.RollingWindow(range(10), 3, stride=0)
+        time_series_datasets.RollingWindow(range(10), 3, stride=0)
 
     with pytest.raises(ValueError):
-        time_series.RollingWindow(
+        time_series_datasets.RollingWindow(
             [[1, 3], [3, 4], [5, 6]],
             2,
             create_channel_dim=True,
@@ -174,7 +174,7 @@ def test_rolling_window_arg_check():
 def test_rolling_window_series(
     series, window_size, stride, create_channel_dim, expected
 ):
-    d = time_series.RollingWindow(
+    d = time_series_datasets.RollingWindow(
         series, window_size, stride=stride, create_channel_dim=create_channel_dim
     )
     assert len(d) == len(expected)
@@ -243,9 +243,11 @@ def test_rolling_window_series(
 def test_target_selection(
     series, window_size, stride, expected_window, expected_target
 ):
-    raw_windows = time_series.RollingWindow(series, window_size, stride=stride)
-    window_and_target = time_series.ContextWindowAndTarget(raw_windows, target_dim=1)
-    encoding_window_and_target = time_series.EncodingContextWindowAndTarget(
+    raw_windows = time_series_datasets.RollingWindow(series, window_size, stride=stride)
+    window_and_target = time_series_datasets.ContextWindowAndTarget(
+        raw_windows, target_dim=1
+    )
+    encoding_window_and_target = time_series_datasets.EncodingContextWindowAndTarget(
         A_SYMBOL_ENCODING, window_and_target
     )
 
