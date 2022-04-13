@@ -23,6 +23,7 @@ TRAIN_FRACTION = 0.80
 SEED = 24  # 42
 
 EPOCHS = 30000
+EPOCH_SHOW_PROGRESS_INTERVAL = 10
 DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
@@ -142,38 +143,49 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
     return symbol_encoding, train_dataloader, test_dataloader
 
 
-def compute_batch_loss(model_network, embeddings, batch, device):
+def batch_output(model_network, embeddings, batch):
     encoding, window, true_values = batch
     window = window.to(device)
     encoding = encoding.to(device)
     true_values = true_values.to(device)
-
     symbol_embedding = embeddings(encoding)
+
     log_p, mu, inv_sigma = model_network(window, symbol_embedding)[:3]
 
-    mb_size, components, channels = mu.shape
-    combined_mu = torch.sum(
-        mu * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
-        dim=1,
-    )
+    return log_p, mu, inv_sigma, true_values
 
-    mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
 
-    loss = -torch.mean(
-        mixture_model_stats.multivariate_log_likelihood(
-            true_values.squeeze(2), log_p, mu, inv_sigma
+def make_loss_function(model_network, embeddings, device):
+    def loss_function(batch):
+        log_p, mu, inv_sigma, true_values = batch_output(
+            model_network, embeddings, batch
         )
-    )
 
-    if np.isnan(float(loss)):
-        print("log_p: ", log_p)
-        print("mu: ", mu)
-        print("inv_sigma: ", inv_sigma)
-        for p in model_network.parameters():
-            print("parameter", p)
-            print("gradient", p.grad)
-        raise Exception("Got a nan")
-    return loss, mean_error
+        mb_size, components, channels = mu.shape
+        combined_mu = torch.sum(
+            mu * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
+            dim=1,
+        )
+
+        mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
+
+        loss = -torch.mean(
+            mixture_model_stats.multivariate_log_likelihood(
+                true_values.squeeze(2), log_p, mu, inv_sigma
+            )
+        )
+
+        if np.isnan(float(loss)):
+            print("log_p: ", log_p)
+            print("mu: ", mu)
+            print("inv_sigma: ", inv_sigma)
+            for p in model_network.parameters():
+                print("parameter", p)
+                print("gradient", p.grad)
+            raise Exception("Got a nan")
+        return loss, mean_error
+
+    return loss_function
 
 
 @click.command()
@@ -253,7 +265,6 @@ def main(
 
     encoding, train_loader, test_loader = prepare_data(symbol, window_size, refresh)
 
-    channels = 1
     optim = torch.optim.Adam(
         parameters,
         lr=LR,
@@ -263,25 +274,29 @@ def main(
     )
 
     best_test_loss = float("inf")
-
     best_epoch = -1
 
     # Next line is here mainly to keep linter happy.
     log_p = mu = inv_sigma = torch.tensor([])
 
+    loss_function = make_loss_function(model_network, embeddings, device)
+
     for e in range(EPOCHS):
         epoch_losses = []
 
         model_network.train()
+
+        batch = None
         for batch in train_loader:
 
-            loss = compute_batch_loss(model_network, embeddings, batch, device)[0]
+            loss = loss_function(batch)[0]
 
             optim.zero_grad()
 
             # To debug Nans, uncomment following line:
             # with torch.autograd.detect_anomaly():
             loss.backward()
+
             torch.nn.utils.clip_grad.clip_grad_norm_(
                 parameters, MAX_GRADIENT_NORM, norm_type=float("inf")
             )
@@ -289,10 +304,17 @@ def main(
 
             epoch_losses.append(float(loss))
 
-        if e % 10 == 0:
-            print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
-            print("last batch mu:\n", mu[:6].detach().cpu().numpy())
-            print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
+        def log_progress(batch):
+            if batch:
+                log_p, mu, inv_sigma = batch_output(model_network, embeddings, batch)[
+                    :3
+                ]
+                print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
+                print("last batch mu:\n", mu[:6].detach().cpu().numpy())
+                print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
+
+        if e % EPOCH_SHOW_PROGRESS_INTERVAL == 0:
+            log_progress(batch)
 
         print(list(embeddings.parameters()))
 
@@ -308,9 +330,7 @@ def main(
             model_network.eval()
 
             for batch in test_loader:
-                test_batch_loss, test_mean_error = compute_batch_loss(
-                    model_network, embeddings, batch, device
-                )
+                test_batch_loss, test_mean_error = loss_function(batch)
                 test_epoch_losses.append(float(test_batch_loss))
                 test_mean_errors.append(float(test_mean_error))
 
