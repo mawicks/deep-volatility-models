@@ -8,7 +8,6 @@ import click
 import numpy as np
 
 import torch
-import torch.utils
 import torch.utils.data
 import torch.utils.data.dataloader
 
@@ -28,37 +27,28 @@ DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
-DEFAULT_MIXTURE_COMPONENTS = 3  # Was 4, then 3
+DEFAULT_MIXTURE_COMPONENTS = 4  # Was 4, then 3
 DROPOUT_P = 0.50
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8  # 1e-5
 USE_BATCH_NORM = False  # False
+ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
-ACTIVATION = torch.nn.ReLU()  # torch.nn.Softplus()
 
 LR = 0.00075 * 0.50  # 2
 WEIGHT_DECAY = 5e-9  # 0.075
 
 null_model_loss = float("inf")
 
-root = os.path.expanduser("~/Google Drive")
-# data_root = os.path.join(root, "Projects/data")
-current_path = os.path.dirname(os.path.realpath(__file__))
-data_root = os.path.join(current_path, "data")
-model_root = os.path.join(current_path, "models")
+CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
+MODEL_ROOT = os.path.join(CURRENT_PATH, "models")
 
 if torch.cuda.is_available():
     dev = "cuda:0"
 else:
     dev = "cpu"
 device = torch.device(dev)
-
-training_start_date = dt.date(year=1998, month=1, day=1)
-test_size = 756
-
-sigmoid = torch.nn.Sigmoid()
-logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 
 def get_model(
@@ -105,7 +95,6 @@ class SymbolDataset(torch.utils.data.Dataset):
 
 
 @click.command()
-@click.option("--project", default="None")
 @click.option(
     "--model_file",
     default=None,
@@ -131,7 +120,6 @@ class SymbolDataset(torch.utils.data.Dataset):
 @click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
 @click.option("--mixture_components", default=DEFAULT_MIXTURE_COMPONENTS, type=int)
 def main(
-    project,
     model_file,
     symbol,
     refresh,
@@ -140,17 +128,16 @@ def main(
     window_size,
     mixture_components,
 ):
-    print("data_root: ", data_root)
-    print("model_root: ", model_root)
-    print("device: ", device)
+    print(f"model_root: {MODEL_ROOT}")
+    print(f"device: {device}")
 
-    # Rewrite symbosl in `symbol` with uppercase versions
+    # Rewrite symbols in `symbol` with uppercase versions
     symbol = list(map(str.upper, symbol))
 
-    print("model_file: ", model_file)
-    print("symbol: ", symbol)
-    print("refresh: ", refresh)
-    print("context: ", window_size)
+    print(f"model_file: {model_file}")
+    print(f"symbol: {symbol}")
+    print(f"refresh: {refresh}")
+    print(f"window_sizet: {window_size}")
 
     print(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
@@ -183,8 +170,6 @@ def main(
 
     print(parameters)
 
-    window_size = n_network.window_size
-
     # Refresh historical data
     print("Reading historical data")
     splits_by_symbol = {}
@@ -193,12 +178,13 @@ def main(
     data_store = stock_data.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
     history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
+    combiner = stock_data.PriceHistoryConcatenator()
 
     for i, s in enumerate(symbol):
         symbol_encoding_dict[s] = i
 
-        symbol_history = history_loader(s, overwrite_existing=refresh)
-        log_returns = symbol_history.loc[:, (s, "log_return")]
+        symbol_history = combiner(history_loader(s, overwrite_existing=refresh))
+        log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
         windowed_returns = time_series.RollingWindowSeries(
             log_returns,
             1 + window_size,
@@ -206,10 +192,8 @@ def main(
         )
         print(windowed_returns[0])
         symbol_dataset = time_series.ContextAndTargetSeries(windowed_returns, 1)
-        _cov, _target = symbol_dataset[0]
         dataset_with_target = SymbolDataset(i, symbol_dataset)
 
-        _label, _cov, _target = dataset_with_target[0]
         train_size = int(TRAIN_FRACTION * len(dataset_with_target))
         lengths = [train_size, len(dataset_with_target) - train_size]
         train, test = torch.utils.data.random_split(dataset_with_target, lengths)
@@ -269,9 +253,6 @@ def main(
             # Note that bias_error is computed on the entire mini-batch and then squared
             # It is not the usual MSE. It is square of the mean of the error, not mean of the square of the error.
             mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
-            # print('\n\ttrain mean true_values', torch.mean(true_values.squeeze(2), dim=0))
-            # print('\ttrain mean combined_mu', torch.mean(combined_mu, dim=0))
-            # print('\ttrain mean_error: ', mean_error)
             bias_error = torch.mean(mean_error ** 2)
 
             loss = -torch.mean(
@@ -289,7 +270,6 @@ def main(
                     print("gradient", p.grad)
                 raise Exception("Got a nan")
 
-            # print(mu, log_sigma, log_p, true_values)
             optim.zero_grad()
 
             # To debug Nans, uncomment following line:
@@ -301,9 +281,6 @@ def main(
             optim.step()
 
             epoch_losses.append(float(loss))
-            # epoch_p = torch.exp(log_p)
-            # batch_mus = torch.sum(epoch_p.unsqueeze(2) * mu,
-            # dim=1).detach().numpy()
 
         if e % 10 == 0:
             print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
@@ -314,7 +291,7 @@ def main(
             print(list(embeddings.parameters()))
 
             train_loss = float(np.mean(epoch_losses))
-            print("epoch {} train loss: {:.4f}".format(e, train_loss))
+            print(f"epoch {e} train loss: {train_loss:.4f}")
 
             # print(
             # '\tepoch sigma(mean) (min/mean/max): {:.4f}/{:.4f}/{:.4f}'
@@ -360,11 +337,10 @@ def main(
                     # It is not the usual MSE. It is square of the mean of the error, not mean of the square of the error.
                     mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
                     print(
-                        "\n\ttest mean true_values",
-                        torch.mean(true_values.squeeze(2), dim=0),
+                        "\n\ttest mean true_values: {torch.mean(true_values.squeeze(2), dim=0)}"
                     )
-                    print("\ttest mean combined_mu", torch.mean(combined_mu, dim=0))
-                    print("\ttest mean_error: ", mean_error)
+                    print(f"\ttest mean combined_mu: {torch.mean(combined_mu, dim=0)}")
+                    print(f"\ttest mean_error: {mean_error}")
                     bias_error = torch.mean(mean_error ** 2)
 
                     log_loss = -torch.mean(
@@ -394,37 +370,28 @@ def main(
 
                     if not just_embeddings:
                         torch.save(
-                            model, os.path.join(model_root, "embedding_model.pt")
+                            model, os.path.join(MODEL_ROOT, "embedding_model.pt")
                         )
 
-                    torch.save(embeddings, os.path.join(model_root, "embeddings.pt"))
+                    torch.save(embeddings, os.path.join(MODEL_ROOT, "embeddings.pt"))
                     torch.save(
                         symbol_encoding_dict,
-                        os.path.join(model_root, "symbol_encodings.pt"),
+                        os.path.join(MODEL_ROOT, "symbol_encodings.pt"),
                     )
                 else:
                     flag = ""
                 print(
-                    "\t     test log loss: {:.4f}  test bias error: {:.7f}".format(
-                        test_loss, test_bias_error
-                    )
+                    f"\t     test log loss: {test_loss:.4f}  test bias error: {test_bias_error:.7f}"
                 )
                 print(
-                    "\t{}total test loss: {:.4f} ({} {:.4f}/{:.4f}){}".format(
-                        flag,
-                        test_loss,
-                        best_epoch,
-                        best_test_loss,
-                        -null_model_loss,
-                        flag,
-                    )
+                    f"\t{flag}total test loss: {test_loss:.4f} ({best_epoch} {best_test_loss:.4f}/{-null_model_loss:.4f}){flag}"
                 )
 
-                torch.save(model, os.path.join(model_root, "last_embedding_model.pt"))
-                torch.save(embeddings, os.path.join(model_root, "last_embeddings.pt"))
+                torch.save(model, os.path.join(MODEL_ROOT, "last_embedding_model.pt"))
+                torch.save(embeddings, os.path.join(MODEL_ROOT, "last_embeddings.pt"))
                 torch.save(
                     symbol_encoding_dict,
-                    os.path.join(model_root, "last_symbol_encoding.pt"),
+                    os.path.join(MODEL_ROOT, "last_symbol_encoding.pt"),
                 )
 
 
