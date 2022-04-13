@@ -138,25 +138,39 @@ def test_mixture_model(
         )
         for train in (True, False):
             g.train(train)
-            log_p, mu, sigma_inv, latents = g(
-                torch.randn((batch_size, input_symbols, window_size)),
-                torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None,
+            ts_data = torch.randn((batch_size, input_symbols, window_size))
+            exogenous_data = (
+                torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None
             )
 
-            assert log_p.shape == (batch_size, mixture_components)
+            log_p_u, mu_u, sigma_inv_u, latents_u = g.forward_unpacked(
+                ts_data,
+                exogenous_data,
+            )
+            log_p, mu, sigma_inv, latents = g(
+                (ts_data, exogenous_data),
+            )
+
+            assert log_p_u.shape == (batch_size, mixture_components)
 
             if output_symbols is None:
                 output_symbols = input_symbols
 
-            assert mu.shape == (batch_size, mixture_components, output_symbols)
-            assert sigma_inv.shape == (
+            assert mu_u.shape == (batch_size, mixture_components, output_symbols)
+
+            assert sigma_inv_u.shape == (
                 batch_size,
                 mixture_components,
                 output_symbols,
                 input_symbols,
             )
 
-            assert latents.shape == (batch_size, feature_dim)
+            assert latents_u.shape == (batch_size, feature_dim)
+
+            assert log_p.shape == log_p_u.shape
+            assert mu.shape == mu_u.shape
+            assert sigma_inv.shape == sigma_inv_u.shape
+            assert latents.shape == latents_u.shape
 
             # Confirm that the window_size property returns the correct size:
             assert window_size == g.window_size

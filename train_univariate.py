@@ -150,7 +150,7 @@ def batch_output(model_network, embeddings, batch):
     true_values = true_values.to(device)
     symbol_embedding = embeddings(encoding)
 
-    log_p, mu, inv_sigma = model_network(window, symbol_embedding)[:3]
+    log_p, mu, inv_sigma = model_network((window, symbol_embedding))[:3]
 
     return log_p, mu, inv_sigma, true_values
 

@@ -370,7 +370,7 @@ class MixtureModel(torch.nn.Module):
             mixture_components=mixture_components,
         )
 
-    def forward(self, time_series, embedding=None):
+    def forward_unpacked(self, time_series, embedding=None):
         """
         Argument:
            context: (minibatch_size, channels, window_size)
@@ -393,3 +393,16 @@ class MixtureModel(torch.nn.Module):
             sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
         return log_p, mu, sigma_inv, latents
+
+    def forward(self, data):
+        """This is a wrapper for the forward_unpacked() method.  It assumes that
+        data is a tuple of (time_series, embedding).  In the case that data is
+        not a tuple, it is assumed to be the time_series portion.
+        """
+        if isinstance(data, tuple):
+            time_series, embedding = data
+        else:
+            time_series = data
+            embedding = None
+
+        return self.forward_unpacked(time_series, embedding)
