@@ -81,19 +81,6 @@ def load_or_create_model(
     return n_network, parameters
 
 
-class SymbolDataset(torch.utils.data.Dataset):
-    def __init__(self, symbol_encoding, symbol_dataset):
-        self.__symbol_encoding = symbol_encoding
-        self.__symbol_dataset = symbol_dataset
-
-    def __len__(self):
-        return len(self.__symbol_dataset)
-
-    def __getitem__(self, i):
-        window, target = self.__symbol_dataset[i]
-        return self.__symbol_encoding, window, target
-
-
 @click.command()
 @click.option(
     "--model_file",
@@ -185,14 +172,14 @@ def main(
 
         symbol_history = combiner(history_loader(s, overwrite_existing=refresh))
         log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
-        windowed_returns = time_series.RollingWindowSeries(
+        windowed_returns = time_series.RollingWindow(
             log_returns,
             1 + window_size,
             create_channel_dim=True,
         )
         print(windowed_returns[0])
-        symbol_dataset = time_series.ContextAndTargetSeries(windowed_returns, 1)
-        dataset_with_target = SymbolDataset(i, symbol_dataset)
+        symbol_dataset = time_series.WindowAndTarget(windowed_returns, 1)
+        dataset_with_target = time_series.EncodingWindowAndTarget(i, symbol_dataset)
 
         train_size = int(TRAIN_FRACTION * len(dataset_with_target))
         lengths = [train_size, len(dataset_with_target) - train_size]

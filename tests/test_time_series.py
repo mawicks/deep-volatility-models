@@ -7,6 +7,10 @@ import torch
 import time_series
 
 
+# Constants used in tests.
+SINGLE_SYMBOL_ENCODING = 21
+
+
 """
 The test cases for multivariate_stats() was generated as follows:
 
@@ -89,10 +93,10 @@ def test_multivariate_stats(series, mu_expected, l_expected):
 
 def test_rolling_window_arg_check():
     with pytest.raises(ValueError):
-        time_series.RollingWindowSeries(range(10), 3, stride=0)
+        time_series.RollingWindow(range(10), 3, stride=0)
 
     with pytest.raises(ValueError):
-        time_series.RollingWindowSeries(
+        time_series.RollingWindow(
             [[1, 3], [3, 4], [5, 6]],
             2,
             create_channel_dim=True,
@@ -168,7 +172,7 @@ def test_rolling_window_arg_check():
     ],
 )
 def test_rolling_window_series(series, window, stride, create_channel_dim, expected):
-    d = time_series.RollingWindowSeries(
+    d = time_series.RollingWindow(
         series, window, stride=stride, create_channel_dim=create_channel_dim
     )
     assert len(d) == len(expected)
@@ -192,7 +196,7 @@ def test_rolling_window_series(series, window, stride, create_channel_dim, expec
 
 
 @pytest.mark.parametrize(
-    "series,window,stride,expected_cov,expected_target",
+    "series,window_size,stride,expected_window,expected_target",
     [
         (
             range(10),
@@ -234,30 +238,48 @@ def test_rolling_window_series(series, window, stride, create_channel_dim, expec
         ),
     ],
 )
-def test_target_selection(series, window, stride, expected_cov, expected_target):
-    d = time_series.RollingWindowSeries(series, window, stride=stride)
-    cts = time_series.ContextAndTargetSeries(d, target_dim=1)
+def test_target_selection(
+    series, window_size, stride, expected_window, expected_target
+):
+    d = time_series.RollingWindow(series, window_size, stride=stride)
+    cts = time_series.WindowAndTarget(d, target_dim=1)
+    encoding_window_and_target = time_series.EncodingWindowAndTarget(
+        SINGLE_SYMBOL_ENCODING, cts
+    )
 
     assert len(cts) == len(expected_target)
+    assert len(encoding_window_and_target) == len(expected_target)
 
     # We use indexes here rather than iterators because we're specifically
     # testing the implementation of __getitem__()
     for i in range(len(expected_target)):
-        cov, target = cts[i]
-        print(f"cov returned:\n\n{cov}")
-        print(f"cov expected:\n{expected_cov[i]}")
-        assert cov.shape == expected_cov[i].shape
-        assert (cov == expected_cov[i]).all()
+        window, target = cts[i]
+        print(f"window returned:\n\n{window}")
+        print(f"window expected:\n{expected_window[i]}")
+        assert window.shape == expected_window[i].shape
+        assert (window == expected_window[i]).all()
 
         print(f"\ntarget returned:\n{target}")
         print(f"target expected:\n{expected_target[i]}")
         assert target.shape == expected_target[i].shape
         assert (target == expected_target[i]).all()
 
+        encoding, window, target = encoding_window_and_target[i]
+        assert encoding == SINGLE_SYMBOL_ENCODING
+        assert window.shape == expected_window[i].shape
+        assert (window == expected_window[i]).all()
+        assert target.shape == expected_target[i].shape
+        assert (target == expected_target[i]).all()
+
     # Make sure negatives indexes work
     for i in range(-len(expected_target), 0):
-        cov, target = cts[i]
-        assert (cov == expected_cov[i]).all()
+        window, target = cts[i]
+        assert (window == expected_window[i]).all()
+        assert (target == expected_target[i]).all()
+
+        encoding, window, target = encoding_window_and_target[i]
+        assert encoding == SINGLE_SYMBOL_ENCODING
+        assert (window == expected_window[i]).all()
         assert (target == expected_target[i]).all()
 
     with pytest.raises(IndexError):

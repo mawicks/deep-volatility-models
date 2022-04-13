@@ -39,7 +39,7 @@ def multivariate_stats(x):
     return mu, sigma
 
 
-class RollingWindowSeries(torch.utils.data.Dataset):
+class RollingWindow(torch.utils.data.Dataset):
     """
     Given a time series, construct a sequence of rolling windows on the series.
     The resuling windows are compatible with the pytorch dataloader: the kth
@@ -61,7 +61,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     Construct a rolling sequence of windows for the series with a window size of
     3 and a default stride of 1.
 
-    >>> windowed_series = time_series.RollingWindowSeries(series, 3)
+    >>> windowed_series = time_series.RollingWindow(series, 3)
 
     The first element (element 0) is a window with the first three values:
 
@@ -80,7 +80,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
 
     For use with convolutional neworks, it's often necessary to create a channel dimension:
 
-    >>> windowed_series = time_series.RollingWindowSeries(series, 3, create_channel_dim=True)
+    >>> windowed_series = time_series.RollingWindow(series, 3, create_channel_dim=True)
     >>> windowed_series[0]
     tensor([[0., 1., 2.]])
 
@@ -97,7 +97,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
     An example will clarify these ideas.
 
     >>> vector_series = [[1, 2], [3, 4], [5, 6], [7, 8]]
-    >>> windowed_vector_series = time_series.RollingWindowSeries(vector_series, 3)
+    >>> windowed_vector_series = time_series.RollingWindow(vector_series, 3)
     >>> windowed_vector_series[0]
     tensor([[1., 3., 5.],
             [2., 4., 6.]])
@@ -193,7 +193,7 @@ class RollingWindowSeries(torch.utils.data.Dataset):
             raise IndexError()
 
 
-class ContextAndTargetSeries(torch.utils.data.Dataset):
+class WindowAndTarget(torch.utils.data.Dataset):
     """Split time series slices into covariates and target"""
 
     def __init__(self, rolling_window_series, target_dim: int = 1):
@@ -220,3 +220,16 @@ class ContextAndTargetSeries(torch.utils.data.Dataset):
             target = t[:, -self.__target_dim :]
 
         return covariates, target
+
+
+class EncodingWindowAndTarget(torch.utils.data.Dataset):
+    def __init__(self, symbol_encoding, symbol_dataset):
+        self.__symbol_encoding = symbol_encoding
+        self.__symbol_dataset = symbol_dataset
+
+    def __len__(self):
+        return len(self.__symbol_dataset)
+
+    def __getitem__(self, i):
+        window, target = self.__symbol_dataset[i]
+        return self.__symbol_encoding, window, target
