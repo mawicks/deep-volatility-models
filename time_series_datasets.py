@@ -222,7 +222,7 @@ class ContextWindowAndTarget(torch.utils.data.Dataset):
         return context_window, target
 
 
-class EncodingContextWindowAndTarget(torch.utils.data.Dataset):
+class ContextWindowEncodingAndTarget(torch.utils.data.Dataset):
     """This augments the data from an instance of WindowAndTarget by adding the encoding for
     its symbol.  This would only be appropriate when building a Dataset for a
     set of different symbols, but a WindowAndTarget instance contains no symbol
@@ -242,6 +242,6 @@ class EncodingContextWindowAndTarget(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return len(self.__symbol_history_dataset)
 
-    def __getitem__(self, i) -> Tuple[Tuple[int, torch.Tensor], torch.Tensor]:
+    def __getitem__(self, i) -> Tuple[Tuple[torch.Tensor, int], torch.Tensor]:
         window, target = self.__symbol_history_dataset[i]
-        return (self.__symbol_encoding, window), target
+        return (window, self.__symbol_encoding), target

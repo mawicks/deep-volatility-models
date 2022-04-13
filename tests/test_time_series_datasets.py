@@ -247,7 +247,7 @@ def test_target_selection(
     window_and_target = time_series_datasets.ContextWindowAndTarget(
         raw_windows, target_dim=1
     )
-    encoding_window_and_target = time_series_datasets.EncodingContextWindowAndTarget(
+    encoding_window_and_target = time_series_datasets.ContextWindowEncodingAndTarget(
         A_SYMBOL_ENCODING, window_and_target
     )
 
@@ -268,7 +268,7 @@ def test_target_selection(
         assert target.shape == expected_target[i].shape
         assert (target == expected_target[i]).all()
 
-        (encoding, window), target = encoding_window_and_target[i]
+        (window, encoding), target = encoding_window_and_target[i]
         assert encoding == A_SYMBOL_ENCODING
         assert window.shape == expected_window[i].shape
         assert (window == expected_window[i]).all()
@@ -281,7 +281,7 @@ def test_target_selection(
         assert (window == expected_window[i]).all()
         assert (target == expected_target[i]).all()
 
-        (encoding, window), target = encoding_window_and_target[i]
+        (window, encoding), target = encoding_window_and_target[i]
         assert encoding == A_SYMBOL_ENCODING
         assert (window == expected_window[i]).all()
         assert (target == expected_target[i]).all()

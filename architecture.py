@@ -394,15 +394,14 @@ class MixtureModel(torch.nn.Module):
 
         return log_p, mu, sigma_inv, latents
 
-    def forward(self, data):
+    def forward(self, predictors):
         """This is a wrapper for the forward_unpacked() method.  It assumes that
         data is a tuple of (time_series, embedding).  In the case that data is
         not a tuple, it is assumed to be the time_series portion.
         """
-        if isinstance(data, tuple):
-            time_series, embedding = data
-        else:
-            time_series = data
-            embedding = None
+        # Allow this to work when passed a tensor. In that case, assume the
+        # intent to be that there are no exogenous inputs.
+        if not isinstance(predictors, tuple):
+            predictors = (predictors, None)
 
-        return self.forward_unpacked(time_series, embedding)
+        return self.forward_unpacked(*predictors)

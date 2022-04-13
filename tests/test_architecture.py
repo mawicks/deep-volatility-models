@@ -147,9 +147,12 @@ def test_mixture_model(
                 ts_data,
                 exogenous_data,
             )
-            log_p, mu, sigma_inv, latents = g(
-                (ts_data, exogenous_data),
-            )
+            if exogenous_data is None:
+                log_p, mu, sigma_inv, latents = g(ts_data)
+            else:
+                log_p, mu, sigma_inv, latents = g(
+                    (ts_data, exogenous_data),
+                )
 
             assert log_p_u.shape == (batch_size, mixture_components)
 

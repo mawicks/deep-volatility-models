@@ -115,7 +115,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
             windowed_returns, 1
         )
         symbol_dataset_with_encoding = (
-            time_series_datasets.EncodingContextWindowAndTarget(i, symbol_dataset)
+            time_series_datasets.ContextWindowEncodingAndTarget(i, symbol_dataset)
         )
 
         train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
@@ -144,7 +144,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
 
 
 def batch_output(model_network, embeddings, batch):
-    (encoding, window), true_values = batch
+    (window, encoding), true_values = batch
     window = window.to(device)
     encoding = encoding.to(device)
     true_values = true_values.to(device)
