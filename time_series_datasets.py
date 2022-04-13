@@ -49,7 +49,7 @@ class RollingWindow(torch.utils.data.Dataset):
 
     Example usage:
 
-    >>> import time_series
+    >>> import time_series_datasets
 
     This modules works with time seris of scalars or time series of vectors. The
     first example is a sequence of scalars:
@@ -61,7 +61,7 @@ class RollingWindow(torch.utils.data.Dataset):
     Construct a rolling sequence of windows for the series with a window size of
     3 and a default stride of 1.
 
-    >>> windowed_series = time_series.RollingWindow(series, 3)
+    >>> windowed_series = time_series_datasets.RollingWindow(series, 3)
 
     The first element (element 0) is a window with the first three values:
 
@@ -80,7 +80,7 @@ class RollingWindow(torch.utils.data.Dataset):
 
     For use with convolutional neworks, it's often necessary to create a channel dimension:
 
-    >>> windowed_series = time_series.RollingWindow(series, 3, create_channel_dim=True)
+    >>> windowed_series = time_series_datasets.RollingWindow(series, 3, create_channel_dim=True)
     >>> windowed_series[0]
     tensor([[0., 1., 2.]])
 
@@ -97,7 +97,7 @@ class RollingWindow(torch.utils.data.Dataset):
     An example will clarify these ideas.
 
     >>> vector_series = [[1, 2], [3, 4], [5, 6], [7, 8]]
-    >>> windowed_vector_series = time_series.RollingWindow(vector_series, 3)
+    >>> windowed_vector_series = time_series_datasets.RollingWindow(vector_series, 3)
     >>> windowed_vector_series[0]
     tensor([[1., 3., 5.],
             [2., 4., 6.]])
