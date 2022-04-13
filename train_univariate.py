@@ -178,12 +178,16 @@ def main(
             create_channel_dim=True,
         )
         print(windowed_returns[0])
-        symbol_dataset = time_series.WindowAndTarget(windowed_returns, 1)
-        dataset_with_target = time_series.EncodingWindowAndTarget(i, symbol_dataset)
+        symbol_dataset = time_series.ContextWindowAndTarget(windowed_returns, 1)
+        symbol_dataset_with_encoding = time_series.EncodingContextWindowAndTarget(
+            i, symbol_dataset
+        )
 
-        train_size = int(TRAIN_FRACTION * len(dataset_with_target))
-        lengths = [train_size, len(dataset_with_target) - train_size]
-        train, test = torch.utils.data.random_split(dataset_with_target, lengths)
+        train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
+        lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
+        train, test = torch.utils.data.random_split(
+            symbol_dataset_with_encoding, lengths
+        )
         splits_by_symbol[s] = {"train": train, "test": test}
 
     train_dataset = torch.utils.data.ConcatDataset(

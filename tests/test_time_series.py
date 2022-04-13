@@ -8,7 +8,7 @@ import time_series
 
 
 # Constants used in tests.
-SINGLE_SYMBOL_ENCODING = 21
+A_SYMBOL_ENCODING = 21
 
 
 """
@@ -243,19 +243,19 @@ def test_rolling_window_series(
 def test_target_selection(
     series, window_size, stride, expected_window, expected_target
 ):
-    d = time_series.RollingWindow(series, window_size, stride=stride)
-    cts = time_series.WindowAndTarget(d, target_dim=1)
-    encoding_window_and_target = time_series.EncodingWindowAndTarget(
-        SINGLE_SYMBOL_ENCODING, cts
+    raw_windows = time_series.RollingWindow(series, window_size, stride=stride)
+    window_and_target = time_series.ContextWindowAndTarget(raw_windows, target_dim=1)
+    encoding_window_and_target = time_series.EncodingContextWindowAndTarget(
+        A_SYMBOL_ENCODING, window_and_target
     )
 
-    assert len(cts) == len(expected_target)
+    assert len(window_and_target) == len(expected_target)
     assert len(encoding_window_and_target) == len(expected_target)
 
     # We use indexes here rather than iterators because we're specifically
     # testing the implementation of __getitem__()
     for i in range(len(expected_target)):
-        window, target = cts[i]
+        window, target = window_and_target[i]
         print(f"window returned:\n\n{window}")
         print(f"window expected:\n{expected_window[i]}")
         assert window.shape == expected_window[i].shape
@@ -267,7 +267,7 @@ def test_target_selection(
         assert (target == expected_target[i]).all()
 
         encoding, window, target = encoding_window_and_target[i]
-        assert encoding == SINGLE_SYMBOL_ENCODING
+        assert encoding == A_SYMBOL_ENCODING
         assert window.shape == expected_window[i].shape
         assert (window == expected_window[i]).all()
         assert target.shape == expected_target[i].shape
@@ -275,17 +275,17 @@ def test_target_selection(
 
     # Make sure negatives indexes work
     for i in range(-len(expected_target), 0):
-        window, target = cts[i]
+        window, target = window_and_target[i]
         assert (window == expected_window[i]).all()
         assert (target == expected_target[i]).all()
 
         encoding, window, target = encoding_window_and_target[i]
-        assert encoding == SINGLE_SYMBOL_ENCODING
+        assert encoding == A_SYMBOL_ENCODING
         assert (window == expected_window[i]).all()
         assert (target == expected_target[i]).all()
 
     with pytest.raises(IndexError):
-        cts[len(expected_target)]
+        window_and_target[len(expected_target)]
 
     with pytest.raises(IndexError):
-        cts[-len(expected_target) - 1]
+        window_and_target[-len(expected_target) - 1]

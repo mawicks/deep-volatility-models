@@ -1,4 +1,4 @@
-from typing import Iterable, Any
+from typing import Any, Iterable, Tuple
 
 import numpy as np
 import torch
@@ -169,10 +169,10 @@ class RollingWindow(torch.utils.data.Dataset):
         self.__create_channel_dim = create_channel_dim
         self.__dtype = dtype
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self.__length
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> torch.Tensor:
         if index < 0:
             index = self.__length + index
 
@@ -193,43 +193,55 @@ class RollingWindow(torch.utils.data.Dataset):
             raise IndexError()
 
 
-class WindowAndTarget(torch.utils.data.Dataset):
-    """Split time series slices into covariates and target"""
+class ContextWindowAndTarget(torch.utils.data.Dataset):
+    """Split sequence of windows into a context window and a target"""
 
-    def __init__(self, rolling_window_series, target_dim: int = 1):
-        """Generally, the stride used to construct Dataset should be equal to
+    def __init__(self, rolling_window_series: RollingWindow, target_dim: int = 1):
+        """Typically, the stride used to construct rolling_window_series would be equal to
         target_dim
 
         """
         self.__time_series_dataset = rolling_window_series
         self.__target_dim = target_dim
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.__time_series_dataset)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> Tuple[torch.Tensor, torch.Tensor]:
         t = self.__time_series_dataset[index]
         if len(t.shape) == 1:  # Sequence of scalars
-            covariates = t[: -self.__target_dim]
+            context_window = t[: -self.__target_dim]
             target = t[-self.__target_dim :]
             # Drop the last dimension when it's one.
             if self.__target_dim == 1:
                 target = target.squeeze(-1)
         else:  # Sequence of vectors
-            covariates = t[:, : -self.__target_dim]
+            context_window = t[:, : -self.__target_dim]
             target = t[:, -self.__target_dim :]
 
-        return covariates, target
+        return context_window, target
 
 
-class EncodingWindowAndTarget(torch.utils.data.Dataset):
-    def __init__(self, symbol_encoding, symbol_dataset):
+class EncodingContextWindowAndTarget(torch.utils.data.Dataset):
+    """This augments the data from an instance of WindowAndTarget by adding the encoding for
+    its symbol.  This would only be appropriate when building a Dataset for a
+    set of different symbols, but a WindowAndTarget instance contains no symbol
+    information.  It represents the history for just a single symbol.  This
+    class adds a single encoding for that symbol to the Dataset.  To build a
+    dataset representing multiple symbols each with their own encodings, you
+    first construct an EncodingWindowAndTarget instance for each symbol
+    separately, then combine the various symbols using
+    torch.utils.data.ConcatDataset()"""
+
+    def __init__(
+        self, symbol_encoding: int, symbol_history_dataset: ContextWindowAndTarget
+    ):
         self.__symbol_encoding = symbol_encoding
-        self.__symbol_dataset = symbol_dataset
+        self.__symbol_history_dataset = symbol_history_dataset
 
-    def __len__(self):
-        return len(self.__symbol_dataset)
+    def __len__(self) -> int:
+        return len(self.__symbol_history_dataset)
 
-    def __getitem__(self, i):
-        window, target = self.__symbol_dataset[i]
+    def __getitem__(self, i) -> Tuple[int, torch.Tensor, torch.Tensor]:
+        window, target = self.__symbol_history_dataset[i]
         return self.__symbol_encoding, window, target
