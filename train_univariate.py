@@ -1,7 +1,7 @@
 # Standard Python
-import copy
 import datetime as dt
 import os.path
+from typing import Iterable
 
 # Common packages
 import click
@@ -60,11 +60,11 @@ def load_or_create_model(
 
     try:
         model = torch.load(model_file)
-        n_network = model.network
+        network = model.network
         print(f"Loaded model from file: {model_file}")
 
     except Exception:
-        n_network = default_network_class(
+        network = default_network_class(
             window_size,
             1,
             feature_dimension=FEATURE_DIMENSION,
@@ -76,9 +76,104 @@ def load_or_create_model(
         )
         print("Initialized new model")
 
-    parameters = list(n_network.parameters())
+    parameters = list(network.parameters())
 
-    return n_network, parameters
+    return network, parameters
+
+
+def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = False):
+    # Refresh historical data
+    print("Reading historical data")
+    splits_by_symbol = {}
+    symbol_encoding = {}
+
+    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
+    data_source = data_sources.YFinanceSource()
+    history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
+
+    for i, s in enumerate(symbol_list):
+        symbol_encoding[s] = i
+
+        # history_loader can load many symbols at once for multivariate
+        # but here we just load the single symbol of interest.  Since we expect
+        # just one dataframe, grab it with next() instead of using a combiner()
+        # (see stock-data.py).)
+        symbol_history = next(history_loader(s, overwrite_existing=refresh))[1]
+
+        # Symbol history is a combined history for all symbosl.  We process it
+        # one symbols at a time, so get the log returns for the current symbol
+        # of interest.
+        # log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
+        windowed_returns = time_series_datasets.RollingWindow(
+            symbol_history.log_return,
+            1 + window_size,
+            create_channel_dim=True,
+        )
+        print(windowed_returns[0])
+        symbol_dataset = time_series_datasets.ContextWindowAndTarget(
+            windowed_returns, 1
+        )
+        symbol_dataset_with_encoding = (
+            time_series_datasets.EncodingContextWindowAndTarget(i, symbol_dataset)
+        )
+
+        train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
+        lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
+        train, test = torch.utils.data.random_split(
+            symbol_dataset_with_encoding, lengths
+        )
+        splits_by_symbol[s] = {"train": train, "test": test}
+
+    train_dataset = torch.utils.data.ConcatDataset(
+        [splits_by_symbol[s]["train"] for s in symbol_list]
+    )
+    test_dataset = torch.utils.data.ConcatDataset(
+        [splits_by_symbol[s]["test"] for s in symbol_list]
+    )
+
+    train_dataloader = torch.utils.data.dataloader.DataLoader(
+        train_dataset, batch_size=MINIBATCH_SIZE, drop_last=True, shuffle=True
+    )
+
+    test_dataloader = torch.utils.data.dataloader.DataLoader(
+        test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=False
+    )
+
+    return symbol_encoding, train_dataloader, test_dataloader
+
+
+def compute_batch_loss(model_network, embeddings, batch, device):
+    encoding, window, true_values = batch
+    window = window.to(device)
+    encoding = encoding.to(device)
+    true_values = true_values.to(device)
+
+    symbol_embedding = embeddings(encoding)
+    log_p, mu, inv_sigma = model_network(window, symbol_embedding)[:3]
+
+    mb_size, components, channels = mu.shape
+    combined_mu = torch.sum(
+        mu * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
+        dim=1,
+    )
+
+    mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
+
+    loss = -torch.mean(
+        mixture_model_stats.multivariate_log_likelihood(
+            true_values.squeeze(2), log_p, mu, inv_sigma
+        )
+    )
+
+    if np.isnan(float(loss)):
+        print("log_p: ", log_p)
+        print("mu: ", mu)
+        print("inv_sigma: ", inv_sigma)
+        for p in model_network.parameters():
+            print("parameter", p)
+            print("gradient", p.grad)
+        raise Exception("Got a nan")
+    return loss, mean_error
 
 
 @click.command()
@@ -86,7 +181,7 @@ def load_or_create_model(
     "--model_file",
     default=None,
     show_default=True,
-    help="File name of resulting model",
+    help="Output file name for trained model",
 )
 @click.option("--symbol", "-s", multiple=True, show_default=True)
 @click.option(
@@ -129,14 +224,15 @@ def main(
     print(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
-    n_network, parameters = load_or_create_model(
+    model_network, parameters = load_or_create_model(
         window_size=window_size,
         mixture_components=mixture_components,
         model_file=model_file,
     )
-    n_network = n_network.to(device)
+    model_network = model_network.to(device)
 
     embeddings = torch.nn.Embedding(len(symbol), EMBEDDING_DIMENSION)
+    embeddings = embeddings.to(device)
 
     if tune_embeddings:
         old_embeddings = next(torch.load(tune_embeddings).parameters())
@@ -145,67 +241,17 @@ def main(
         n, m = new_embeddings.shape
         new_embeddings.data = mean_embedding.unsqueeze(0).expand(n, m).clone()
 
-    embeddings = embeddings.to(device)
-
     parameters = list(embeddings.parameters())
 
     if just_embeddings:
-        n_network.eval()
+        model_network.eval()
     else:
-        n_network.train()
-        parameters.extend(n_network.parameters())
+        model_network.train()
+        parameters.extend(model_network.parameters())
 
     print(parameters)
 
-    # Refresh historical data
-    print("Reading historical data")
-    splits_by_symbol = {}
-    symbol_encoding_dict = {}
-
-    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
-    data_source = data_sources.YFinanceSource()
-    history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
-    combiner = stock_data.PriceHistoryConcatenator()
-
-    for i, s in enumerate(symbol):
-        symbol_encoding_dict[s] = i
-
-        symbol_history = combiner(history_loader(s, overwrite_existing=refresh))
-        log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
-        windowed_returns = time_series_datasets.RollingWindow(
-            log_returns,
-            1 + window_size,
-            create_channel_dim=True,
-        )
-        print(windowed_returns[0])
-        symbol_dataset = time_series_datasets.ContextWindowAndTarget(
-            windowed_returns, 1
-        )
-        symbol_dataset_with_encoding = (
-            time_series_datasets.EncodingContextWindowAndTarget(i, symbol_dataset)
-        )
-
-        train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
-        lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
-        train, test = torch.utils.data.random_split(
-            symbol_dataset_with_encoding, lengths
-        )
-        splits_by_symbol[s] = {"train": train, "test": test}
-
-    train_dataset = torch.utils.data.ConcatDataset(
-        [splits_by_symbol[s]["train"] for s in symbol]
-    )
-    test_dataset = torch.utils.data.ConcatDataset(
-        [splits_by_symbol[s]["test"] for s in symbol]
-    )
-
-    training_dataloader = torch.utils.data.dataloader.DataLoader(
-        train_dataset, batch_size=MINIBATCH_SIZE, drop_last=True, shuffle=True
-    )
-
-    test_dataloader = torch.utils.data.dataloader.DataLoader(
-        test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=False
-    )
+    encoding, train_loader, test_loader = prepare_data(symbol, window_size, refresh)
 
     channels = 1
     optim = torch.optim.Adam(
@@ -219,49 +265,17 @@ def main(
     best_test_loss = float("inf")
 
     best_epoch = -1
-    log_p = mu = inv_sigma = torch.tensor(
-        []
-    )  # This is here mainly to keep type checker and linter happy.
+
+    # Next line is here mainly to keep linter happy.
+    log_p = mu = inv_sigma = torch.tensor([])
 
     for e in range(EPOCHS):
         epoch_losses = []
 
-        for minibatch, (symbol_encoding, window, true_values) in enumerate(
-            training_dataloader
-        ):
-            window = window.to(device)
-            symbol_encoding = symbol_encoding.to(device)
-            true_values = true_values.to(device)
+        model_network.train()
+        for batch in train_loader:
 
-            symbol_embedding = embeddings(symbol_encoding)
-            log_p, mu, inv_sigma = n_network(window, symbol_embedding)[:3]
-
-            mb_size, components, channels = mu.shape
-            combined_mu = torch.sum(
-                mu
-                * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
-                dim=1,
-            )
-
-            # Note that bias_error is computed on the entire mini-batch and then squared
-            # It is not the usual MSE. It is square of the mean of the error, not mean of the square of the error.
-            mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
-            bias_error = torch.mean(mean_error ** 2)
-
-            loss = -torch.mean(
-                mixture_model_stats.multivariate_log_likelihood(
-                    true_values.squeeze(2), log_p, mu, inv_sigma
-                )
-            )
-
-            if np.isnan(float(loss)):
-                print("log_p: ", log_p)
-                print("mu: ", mu)
-                print("inv_sigma: ", inv_sigma)
-                for p in n_network.parameters():
-                    print("parameter", p)
-                    print("gradient", p.grad)
-                raise Exception("Got a nan")
+            loss = compute_batch_loss(model_network, embeddings, batch, device)[0]
 
             optim.zero_grad()
 
@@ -280,110 +294,65 @@ def main(
             print("last batch mu:\n", mu[:6].detach().cpu().numpy())
             print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
 
-        if e % 1 == 0:
-            print(list(embeddings.parameters()))
+        print(list(embeddings.parameters()))
 
-            train_loss = float(np.mean(epoch_losses))
-            print(f"epoch {e} train loss: {train_loss:.4f}")
+        train_loss = float(np.mean(epoch_losses))
+        print(f"epoch {e} train loss: {train_loss:.4f}")
 
-            # print(
-            # '\tepoch sigma(mean) (min/mean/max): {:.4f}/{:.4f}/{:.4f}'
-            #       .format(
-            #        np.min(epoch_sigmas), np.mean(epoch_sigmas),
-            #        np.max(epoch_sigmas)))
-            # print('\tepoch mu (min/mean/max): {:.4f}/{:.4f}/{:.4f}'.format(
-            #    np.min(epoch_mus), np.mean(epoch_mus), np.max(epoch_mus)))
+        # Evalute the loss on the test set
+        test_epoch_losses = []
+        test_mean_errors = []
 
-            # Evalute the loss on the test set
-            test_epoch_losses = []
-            test_epoch_bias_errors = []
+        # Don't compute gradients
+        with torch.no_grad():
+            model_network.eval()
 
-            # Don't compute gradiets
-            with torch.no_grad():
-                # Use a copy of the model for evaluation so there's no
-                # possibility of leaking test data into the model.
-                # Use the model in eval() mode.
-                network_copy = copy.deepcopy(n_network).eval()
-
-                for minibatch, (symbol_encoding, window, true_values) in enumerate(
-                    test_dataloader
-                ):
-                    window = window.to(device)
-                    true_values = true_values.to(device)
-                    symbol_encoding = symbol_encoding.to(device)
-
-                    symbol_embedding = embeddings(symbol_encoding)
-                    log_p, mu, inv_sigma = network_copy(window, symbol_embedding)[:3]
-
-                    mb_size, components, channels = mu.shape
-                    combined_mu = torch.sum(
-                        mu
-                        * torch.exp(log_p)
-                        .unsqueeze(2)
-                        .expand((mb_size, components, channels)),
-                        dim=1,
-                    )
-
-                    # Note that bias_error is computed on the entire mini-batch and then squared
-                    # It is not the usual MSE. It is square of the mean of the error, not mean of the square of the error.
-                    mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
-                    print(
-                        "\n\ttest mean true_values: {torch.mean(true_values.squeeze(2), dim=0)}"
-                    )
-                    print(f"\ttest mean combined_mu: {torch.mean(combined_mu, dim=0)}")
-                    print(f"\ttest mean_error: {mean_error}")
-                    bias_error = torch.mean(mean_error ** 2)
-
-                    log_loss = -torch.mean(
-                        mixture_model_stats.multivariate_log_likelihood(
-                            true_values.squeeze(2), log_p, mu, inv_sigma
-                        )
-                    )
-
-                    test_epoch_losses.append(float(log_loss))
-                    test_epoch_bias_errors.append(float(bias_error))
-
-                test_loss = float(np.mean(test_epoch_losses))
-                test_bias_error = float(np.mean(test_epoch_bias_errors))
-
-                model = models.StockModelV2(
-                    network=network_copy,
-                    symbols=symbol,
-                    epochs=e,
-                    date=dt.datetime.now(),
-                    null_model_loss=null_model_loss,
-                    loss=test_loss,
+            for batch in test_loader:
+                test_batch_loss, test_mean_error = compute_batch_loss(
+                    model_network, embeddings, batch, device
                 )
-                if test_loss < best_test_loss:
-                    best_test_loss = test_loss
-                    best_epoch = e
-                    flag = " ** "
+                test_epoch_losses.append(float(test_batch_loss))
+                test_mean_errors.append(float(test_mean_error))
 
-                    if not just_embeddings:
-                        torch.save(
-                            model, os.path.join(MODEL_ROOT, "embedding_model.pt")
-                        )
+            test_loss = float(np.mean(test_epoch_losses))
+            test_mean_error = float(np.mean(test_mean_errors))
 
-                    torch.save(embeddings, os.path.join(MODEL_ROOT, "embeddings.pt"))
-                    torch.save(
-                        symbol_encoding_dict,
-                        os.path.join(MODEL_ROOT, "symbol_encodings.pt"),
-                    )
-                else:
-                    flag = ""
-                print(
-                    f"\t     test log loss: {test_loss:.4f}  test bias error: {test_bias_error:.7f}"
-                )
-                print(
-                    f"\t{flag}total test loss: {test_loss:.4f} ({best_epoch} {best_test_loss:.4f}/{-null_model_loss:.4f}){flag}"
-                )
+            model = models.StockModelV2(
+                network=model_network,
+                symbols=symbol,
+                epochs=e,
+                date=dt.datetime.now(),
+                null_model_loss=null_model_loss,
+                loss=test_loss,
+            )
+            if test_loss < best_test_loss:
+                best_test_loss = test_loss
+                best_epoch = e
+                flag = "**"
 
-                torch.save(model, os.path.join(MODEL_ROOT, "last_embedding_model.pt"))
-                torch.save(embeddings, os.path.join(MODEL_ROOT, "last_embeddings.pt"))
+                if not just_embeddings:
+                    torch.save(model, os.path.join(MODEL_ROOT, "embedding_model.pt"))
+
+                torch.save(embeddings, os.path.join(MODEL_ROOT, "embeddings.pt"))
                 torch.save(
-                    symbol_encoding_dict,
-                    os.path.join(MODEL_ROOT, "last_symbol_encoding.pt"),
+                    encoding,
+                    os.path.join(MODEL_ROOT, "symbol_encodings.pt"),
                 )
+            else:
+                flag = "  "
+            print(
+                f"\t   test log loss: {test_loss:.4f}  test mean error: {test_mean_error:.7f}"
+            )
+            print(
+                f"\t{flag} total test loss: {test_loss:.4f} (best epoch {best_epoch}: {best_test_loss:.4f}) {flag}"
+            )
+
+            torch.save(model, os.path.join(MODEL_ROOT, "last_embedding_model.pt"))
+            torch.save(embeddings, os.path.join(MODEL_ROOT, "last_embeddings.pt"))
+            torch.save(
+                encoding,
+                os.path.join(MODEL_ROOT, "last_symbol_encoding.pt"),
+            )
 
 
 if __name__ == "__main__":
