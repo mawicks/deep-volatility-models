@@ -143,22 +143,21 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
     return symbol_encoding, train_dataloader, test_dataloader
 
 
-def batch_output(model_network, embeddings, batch):
-    (window, encoding), true_values = batch
+def batch_output(model_network, embeddings, predictors, device=None):
+    (window, encoding) = predictors
     window = window.to(device)
     encoding = encoding.to(device)
-    true_values = true_values.to(device)
     symbol_embedding = embeddings(encoding)
 
     log_p, mu, inv_sigma = model_network((window, symbol_embedding))[:3]
 
-    return log_p, mu, inv_sigma, true_values
+    return log_p, mu, inv_sigma
 
 
 def make_loss_function(model_network, embeddings, device):
-    def loss_function(batch):
-        log_p, mu, inv_sigma, true_values = batch_output(
-            model_network, embeddings, batch
+    def loss_function(predictors, target):
+        log_p, mu, inv_sigma = batch_output(
+            model_network, embeddings, predictors, device
         )
 
         mb_size, components, channels = mu.shape
@@ -167,11 +166,11 @@ def make_loss_function(model_network, embeddings, device):
             dim=1,
         )
 
-        mean_error = torch.mean(true_values.squeeze(2) - combined_mu, dim=0)
+        mean_error = torch.mean(target.squeeze(2) - combined_mu, dim=0)
 
         loss = -torch.mean(
             mixture_model_stats.multivariate_log_likelihood(
-                true_values.squeeze(2), log_p, mu, inv_sigma
+                target.squeeze(2), log_p, mu, inv_sigma
             )
         )
 
@@ -299,9 +298,9 @@ def main(
         model_network.train()
 
         batch = None
-        for batch in train_loader:
+        for predictors, target in train_loader:
 
-            loss = loss_function(batch)[0]
+            loss = loss_function(predictors, target)[0]
 
             optim.zero_grad()
 
@@ -332,8 +331,10 @@ def main(
         with torch.no_grad():
             model_network.eval()
 
-            for batch in test_loader:
-                batch_loss_test, epoch_mean_error_test = loss_function(batch)
+            for predictors, target in test_loader:
+                batch_loss_test, epoch_mean_error_test = loss_function(
+                    predictors, target
+                )
                 batch_losses_test.append(float(batch_loss_test))
                 batch_mean_errors_test.append(float(epoch_mean_error_test))
 
