@@ -7,6 +7,7 @@ import architecture
 
 BATCH_SIZE = 5
 NOISE_DIM = 77
+EMBEDDING_SYMBOLS = 9
 
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
@@ -110,10 +111,17 @@ def test_mixture_model(
     we also check that the network executes properly with the training flag on
     and off.
 
+    This code actually tests three things:
+    1) Does for the forward() method of the mixture network provide sane outputs
+    2) Does the forward_unpacked() method of the mixture netowrk provide sane
+    outputs
+    3) Does the forward() method of the ModelAndEmbedding work after combining
+    a mixture model with an embedding.
+
     """
     if expect_value_error:
         with pytest.raises(ValueError):
-            g = architecture.MixtureModel(
+            mixture_model = architecture.MixtureModel(
                 window_size,
                 input_symbols,
                 output_symbols,
@@ -125,7 +133,8 @@ def test_mixture_model(
                 use_batch_norm=use_batch_norm,
             )
     else:
-        g = architecture.MixtureModel(
+        # This is the base mixture model we're testing.
+        mixture_model = architecture.MixtureModel(
             window_size,
             input_symbols,
             output_symbols,
@@ -136,38 +145,59 @@ def test_mixture_model(
             extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
         )
+        # Also create an embedding to test that ModelWithEmbedding returns sane results
+        embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
+
+        # Combing mixture_model with embedding in embedding_model
+        embedding_model = architecture.ModelWithEmbedding(mixture_model, embedding)
+
+        # Create some test inputs.
+        # 1) time series data:
+        ts_data = torch.randn((batch_size, input_symbols, window_size))
+        # 2) exogenous data (here that comes from an embedding, but that's not
+        # necessarily the case).)
+        exogenous_data = (
+            torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None
+        )
+        # 3) an encoding vecto to tes with embedding_model
+        encoding = torch.randint(0, EMBEDDING_SYMBOLS, (batch_size,))
+
+        # Below we call the forward() methods of mixture_model and
+        # embedding_model and also the forward_unpacked() method of
+        # mixture_model and make sure they return tensors with the correct dimensions.
+
         for train in (True, False):
-            g.train(train)
-            ts_data = torch.randn((batch_size, input_symbols, window_size))
-            exogenous_data = (
-                torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None
-            )
-
-            log_p_u, mu_u, sigma_inv_u, latents_u = g.forward_unpacked(
-                ts_data,
-                exogenous_data,
-            )
-            if exogenous_data is None:
-                log_p, mu, sigma_inv, latents = g(ts_data)
-            else:
-                log_p, mu, sigma_inv, latents = g(
-                    (ts_data, exogenous_data),
-                )
-
-            assert log_p_u.shape == (batch_size, mixture_components)
+            mixture_model.train(train)
+            embedding_model.train(train)
 
             if output_symbols is None:
                 output_symbols = input_symbols
 
-            assert mu_u.shape == (batch_size, mixture_components, output_symbols)
+            # Call forward_unpacked()
+            log_p_u, mu_u, sigma_inv_u, latents_u = mixture_model.forward_unpacked(
+                ts_data,
+                exogenous_data,
+            )
 
+            # Call mixture_model.forward() with different variations
+            if exogenous_data is None:
+                log_p, mu, sigma_inv, latents = mixture_model(ts_data)
+            else:
+                log_p, mu, sigma_inv, latents = mixture_model(
+                    (ts_data, exogenous_data),
+                )
+
+            # Call embedding_model.forward()
+            log_p_e, mu_e, sigma_inv_e, latents_e = embedding_model((ts_data, encoding))
+
+            assert log_p_u.shape == (batch_size, mixture_components)
+            assert mu_u.shape == (batch_size, mixture_components, output_symbols)
             assert sigma_inv_u.shape == (
                 batch_size,
                 mixture_components,
                 output_symbols,
                 input_symbols,
             )
-
             assert latents_u.shape == (batch_size, feature_dim)
 
             assert log_p.shape == log_p_u.shape
@@ -175,8 +205,13 @@ def test_mixture_model(
             assert sigma_inv.shape == sigma_inv_u.shape
             assert latents.shape == latents_u.shape
 
+            assert log_p.shape == log_p_e.shape
+            assert mu.shape == mu_e.shape
+            assert sigma_inv.shape == sigma_inv_e.shape
+            assert latents.shape == latents_e.shape
+
             # Confirm that the window_size property returns the correct size:
-            assert window_size == g.window_size
+            assert window_size == mixture_model.window_size
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,8 @@
+from typing import Any
+
 import torch
 import torch.nn
+
 
 # Mixture tuning parametrers
 DEFAULT_MIXTURE_FEATURES = 20  # May be overrideen by caller
@@ -370,10 +373,10 @@ class MixtureModel(torch.nn.Module):
             mixture_components=mixture_components,
         )
 
-    def forward_unpacked(self, time_series, embedding=None):
+    def forward_unpacked(self, window, exogenous=None):
         """
         Argument:
-           context: (minibatch_size, channels, window_size)
+           windowt: (minibatch_size, channels, window_size)
         Returns:
            log_p_raw: (minibatch_size, components)
            mu: (minibatch_size, components, channels)
@@ -384,7 +387,7 @@ class MixtureModel(torch.nn.Module):
 
         """
         # Get a "flat" feature vector for the series.
-        latents = self.time_series_features(time_series, embedding)
+        latents = self.time_series_features(window, exogenous)
 
         log_p, mu, sigma_inv = self.head(latents)
 
@@ -405,3 +408,53 @@ class MixtureModel(torch.nn.Module):
             predictors = (predictors, None)
 
         return self.forward_unpacked(*predictors)
+
+
+class ModelWithEmbedding(torch.nn.Module):
+    """
+    This is a wrapper for a model.  The wrapper preprocesses an emcoding into an
+    embedding before calling the model.  This decouples the embedding from the
+    training of the rest of the model.  The embedding can be replaced or
+    retrained without changing anything in the model.
+
+    >>> import torch
+    >>> import architecture
+    >>> model = architecture.MixtureModel(64, 1, 1)
+    >>> embedding = torch.nn.Embedding(20,3)
+    >>> combined_model = architecture.ModelWithEmbedding(model, embedding)
+    """
+
+    def __init__(self, model: torch.nn.Module, embedding: torch.nn.Embedding):
+        """
+        Arguments:
+            model: torch.nn.Module - The model to which embeddings are to be
+            applied to an encoding on one of the inputs.  The model.forward()
+            method is assumed to accept a tuple (Tuple[torch.Tensor,
+            torch.Tensor] with the first position of the tuple being predictors
+            other than the embedding and the second position of the tuple being
+            the embedding.  embedding: torch.nn.Embedding - The trainable
+            embedding.
+        """
+
+        super().__init__()
+
+        self.model = model
+        self.embedding = embedding
+
+    def forward(self, predictors_plus_encoding) -> Any:
+        """
+        Arguments:
+            predictors: Tuple[torch.Tensor, torch.Tensor] - The first position
+            of the tuple could be any predictor vector (though here it's
+            typically a time series window) intended to be passed to
+            convolutional layers in `self.model.`  The second position is an
+            encoding to be converted to an embedding.  The model is called again
+            with a tuple (Tuple[torch.Tensor, torch.Tensor]).  The predictors
+            are passed unmodified in the first position of thetuple.  The
+            embedding that replaces the encoding is passed in the second position.
+
+        """
+        predictors, encoding = predictors_plus_encoding
+
+        embeddings = self.embedding(encoding)
+        return self.model((predictors, embeddings))
