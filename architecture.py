@@ -415,13 +415,21 @@ class ModelWithEmbedding(torch.nn.Module):
     This is a wrapper for a model.  The wrapper preprocesses an emcoding into an
     embedding before calling the model.  This decouples the embedding from the
     training of the rest of the model.  The embedding can be replaced or
-    retrained without changing anything in the model.
+    retrained without changing anything in the model.  The caller is responsible
+    for creating the model and the embedding. Here's an example:
 
     >>> import torch
     >>> import architecture
-    >>> model = architecture.MixtureModel(64, 1, 1)
-    >>> embedding = torch.nn.Embedding(20,3)
-    >>> combined_model = architecture.ModelWithEmbedding(model, embedding)
+    >>> mixture_model = architecture.MixtureModel(64, 1, 1)
+    >>> embedding = torch.nn.Embedding(20, 3)
+    >>> combined_model = architecture.ModelWithEmbedding(mixture_model, embedding)
+
+    At this point, the caller is free to manage (e.g., save, load, train,
+    replace, etc.) both the model and the embedding as necesary.
+
+    The mixture_model and the combined_model are similar except that the
+    mixture_model accepts an embedding vector in the second position of the
+    tuple passed to forward() whereas the combined_model accpets an integer encoding.
     """
 
     def __init__(self, model: torch.nn.Module, embedding: torch.nn.Embedding):
@@ -434,6 +442,8 @@ class ModelWithEmbedding(torch.nn.Module):
             other than the embedding and the second position of the tuple being
             the embedding.  embedding: torch.nn.Embedding - The trainable
             embedding.
+
+            embedding: torch.nn.Embedding - The embedding to apply.
         """
 
         super().__init__()
