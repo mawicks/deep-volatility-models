@@ -25,22 +25,22 @@ logging.basicConfig(level=logging.INFO)
 TRAIN_FRACTION = 0.80
 SEED = 24  # 42
 
-EPOCHS = 30000
-EARLY_TERMINATION = 1000
-EPOCH_SHOW_PROGRESS_INTERVAL = 1
+EPOCHS = 500  # 30000
+EARLY_TERMINATION = 20  # Was 1000
 
 DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
 DEFAULT_MIXTURE_COMPONENTS = 4  # Was 4, then 3
+DEFAULT_GAUSSIAN_NOISE = 0.0025
 
 
 DROPOUT_P = 0.50
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8  # 1e-5
-USE_BATCH_NORM = True  # False
+USE_BATCH_NORM = False  # False
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
@@ -62,7 +62,12 @@ device = torch.device(dev)
 def load_or_create_model(
     window_size=DEFAULT_WINDOW_SIZE,
     mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+    feature_dimension=FEATURE_DIMENSION,
+    embedding_dimension=EMBEDDING_DIMENSION,
+    gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
     model_file=None,
+    use_batch_norm=USE_BATCH_NORM,
+    dropout=DROPOUT_P,
 ):
     default_network_class = architecture.MixtureModel
 
@@ -75,11 +80,12 @@ def load_or_create_model(
         network = default_network_class(
             window_size,
             1,
-            feature_dimension=FEATURE_DIMENSION,
+            feature_dimension=feature_dimension,
             mixture_components=mixture_components,
-            exogenous_dimension=EMBEDDING_DIMENSION,
-            dropout=DROPOUT_P,
-            use_batch_norm=USE_BATCH_NORM,
+            exogenous_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
             activation=ACTIVATION,
         )
         logging.info("Initialized new model")
@@ -89,7 +95,12 @@ def load_or_create_model(
     return network, parameters
 
 
-def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = False):
+def prepare_data(
+    symbol_list: Iterable[str],
+    window_size: int,
+    refresh: bool = False,
+    minibatch_size: int = MINIBATCH_SIZE,
+):
     # Refresh historical data
     logging.info("Reading historical data")
     splits_by_symbol = {}
@@ -98,6 +109,20 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
     data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
     data_source = data_sources.YFinanceSource()
     history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
+
+    # For the purposes of hyperparameter optimization, make sure that
+    # changing the window size doesn't change the number of rows.  In
+    # other words, we always consume the first 256 points of history,
+    # even if we don't use them as context so that first target return
+    # in the dataset is always the same, independent of the window
+    # size.  Also, this won't work if window_size exceeds 256, so we
+    # trap that case:
+    if window_size > 256:
+        raise ValueError(
+            f"Window size of {window_size} isn't allowed.  Window size must be 256 or less"
+        )
+
+    skip = 256 - window_size
 
     for i, s in enumerate(symbol_list):
         symbol_encoding[s] = i
@@ -113,7 +138,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
         # of interest.
         # log_returns = symbol_history.loc[:, (s, "log_return")]  # type: ignore
         windowed_returns = time_series_datasets.RollingWindow(
-            symbol_history.log_return,
+            symbol_history.log_return[skip:],
             1 + window_size,
             create_channel_dim=True,
         )
@@ -140,11 +165,11 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
     )
 
     train_dataloader = torch.utils.data.dataloader.DataLoader(
-        train_dataset, batch_size=MINIBATCH_SIZE, drop_last=True, shuffle=True
+        train_dataset, batch_size=minibatch_size, drop_last=True, shuffle=True
     )
 
     test_dataloader = torch.utils.data.dataloader.DataLoader(
-        test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=False
+        test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=True
     )
 
     return symbol_encoding, train_dataloader, test_dataloader
@@ -231,7 +256,7 @@ def make_epoch_callback(just_embeddings, model, encoding, symbols):
     save_model = make_save_model(just_embeddings, model, encoding, symbols)
 
     def epoch_callback(epoch, train_epoch_loss, test_epoch_loss):
-        logging.info(f"parameters: {(list(model.embedding.parameters()))}")
+        logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
         save_model(epoch, test_epoch_loss, prefix="last_")
 
     return epoch_callback
@@ -265,6 +290,16 @@ def run(
     just_embeddings,
     window_size,
     mixture_components,
+    feature_dimension=FEATURE_DIMENSION,
+    embedding_dimension=EMBEDDING_DIMENSION,
+    gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
+    minibatch_size=MINIBATCH_SIZE,
+    use_batch_norm=USE_BATCH_NORM,
+    dropout=DROPOUT_P,
+    learning_rate=LR,
+    weight_decay=WEIGHT_DECAY,
+    max_epochs=EPOCHS,
+    early_termination=EARLY_TERMINATION,
 ):
     logging.debug(f"model_root: {MODEL_ROOT}")
     logging.debug(f"device: {device}")
@@ -283,11 +318,16 @@ def run(
     model_network, parameters = load_or_create_model(
         window_size=window_size,
         mixture_components=mixture_components,
+        feature_dimension=feature_dimension,
+        embedding_dimension=embedding_dimension,
+        gaussian_noise=gaussian_noise,
         model_file=model_file,
+        use_batch_norm=use_batch_norm,
+        dropout=dropout,
     )
     model_network = model_network.to(device)
 
-    embeddings = torch.nn.Embedding(len(symbol), EMBEDDING_DIMENSION)
+    embeddings = torch.nn.Embedding(len(symbol), embedding_dimension)
     embeddings = embeddings.to(device)
 
     if tune_embeddings:
@@ -305,17 +345,19 @@ def run(
         model_network.train()
         parameters.extend(model_network.parameters())
 
-    logging.info(f"parameters: {parameters}")
+    logging.debug(f"parameters: {parameters}")
 
-    encoding, train_loader, test_loader = prepare_data(symbol, window_size, refresh)
+    encoding, train_loader, test_loader = prepare_data(
+        symbol, window_size, refresh, minibatch_size=minibatch_size
+    )
     the_model = architecture.ModelWithEmbedding(model_network, embeddings)
 
     optim = torch.optim.Adam(
         parameters,
-        lr=LR,
+        lr=learning_rate,
         eps=ADAM_EPSILON,
         betas=(BETA1, BETA2),
-        weight_decay=WEIGHT_DECAY,
+        weight_decay=weight_decay,
     )
 
     # Initialize state for early termination monitoring
@@ -331,7 +373,7 @@ def run(
     )
 
     # This is the main epoch loop
-    for epoch in range(EPOCHS):
+    for epoch in range(max_epochs):
 
         train_epoch_loss = do_batches(
             epoch,
@@ -370,11 +412,13 @@ def run(
         logging.info(
             f" {flag} Epoch {epoch}: loss (test): {test_epoch_loss:.4f}  best epoch: {best_epoch}  best loss:{best_test_loss:.4f} {flag}"
         )
-        if epoch >= best_epoch + EARLY_TERMINATION:
+        if epoch >= best_epoch + early_termination:
             logging.info(
                 f"No improvement in {EARLY_TERMINATION} epochs.  Terminating early."
             )
             break  # Terminate early
+
+    return best_test_loss
 
 
 @click.command()
@@ -419,6 +463,7 @@ def main_cli(
         just_embeddings,
         window_size,
         mixture_components,
+        use_batch_norm=USE_BATCH_NORM,
     )
 
 
