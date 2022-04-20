@@ -1,5 +1,6 @@
 # Standard Python
 import datetime as dt
+import logging
 import os.path
 from typing import Iterable
 
@@ -19,21 +20,27 @@ import time_series_datasets
 import models
 import architecture
 
+logging.basicConfig(level=logging.INFO)
+
 TRAIN_FRACTION = 0.80
 SEED = 24  # 42
 
 EPOCHS = 30000
-EPOCH_SHOW_PROGRESS_INTERVAL = 10
+EARLY_TERMINATION = 1000
+EPOCH_SHOW_PROGRESS_INTERVAL = 1
+
 DEFAULT_WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
 FEATURE_DIMENSION = 40
 DEFAULT_MIXTURE_COMPONENTS = 4  # Was 4, then 3
+
+
 DROPOUT_P = 0.50
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8  # 1e-5
-USE_BATCH_NORM = False  # False
+USE_BATCH_NORM = True  # False
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
@@ -62,7 +69,7 @@ def load_or_create_model(
     try:
         model = torch.load(model_file)
         network = model.network
-        print(f"Loaded model from file: {model_file}")
+        logging.info(f"Loaded model from file: {model_file}")
 
     except Exception:
         network = default_network_class(
@@ -75,7 +82,7 @@ def load_or_create_model(
             use_batch_norm=USE_BATCH_NORM,
             activation=ACTIVATION,
         )
-        print("Initialized new model")
+        logging.info("Initialized new model")
 
     parameters = list(network.parameters())
 
@@ -84,7 +91,7 @@ def load_or_create_model(
 
 def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = False):
     # Refresh historical data
-    print("Reading historical data")
+    logging.info("Reading historical data")
     splits_by_symbol = {}
     symbol_encoding = {}
 
@@ -110,7 +117,7 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
             1 + window_size,
             create_channel_dim=True,
         )
-        print("windowed_returns[0]: ", windowed_returns[0])
+        logging.debug(f"{s} windowed_returns[0]: ", windowed_returns[0])
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
@@ -143,30 +150,9 @@ def prepare_data(symbol_list: Iterable[str], window_size: int, refresh: bool = F
     return symbol_encoding, train_dataloader, test_dataloader
 
 
-def batch_output(model_network, embeddings, predictors, device=None):
-    (window, encoding) = predictors
-    window = window.to(device)
-    encoding = encoding.to(device)
-    symbol_embedding = embeddings(encoding)
-
-    log_p, mu, inv_sigma = model_network((window, symbol_embedding))[:3]
-
-    return log_p, mu, inv_sigma
-
-
-def make_loss_function(model_network, embeddings, device):
-    def loss_function(predictors, target):
-        log_p, mu, inv_sigma = batch_output(
-            model_network, embeddings, predictors, device
-        )
-
-        mb_size, components, channels = mu.shape
-        combined_mu = torch.sum(
-            mu * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
-            dim=1,
-        )
-
-        mean_error = torch.mean(target.squeeze(2) - combined_mu, dim=0)
+def make_loss_function():
+    def loss_function(output, target):
+        log_p, mu, inv_sigma = output[:3]
 
         loss = -torch.mean(
             mixture_model_stats.multivariate_log_likelihood(
@@ -175,55 +161,103 @@ def make_loss_function(model_network, embeddings, device):
         )
 
         if np.isnan(float(loss)):
-            print("log_p: ", log_p)
-            print("mu: ", mu)
-            print("inv_sigma: ", inv_sigma)
-            for p in model_network.parameters():
-                print("parameter", p)
-                print("gradient", p.grad)
-            raise Exception("Got a nan")
-        return loss, mean_error
+            logging.error("log_p: ", log_p)
+            logging.error("mu: ", mu)
+            logging.error("inv_sigma: ", inv_sigma)
+
+        return loss
 
     return loss_function
 
 
-def make_batch_logger(model_network, embeddings):
-    def log_batch_info(batch):
-        if batch:
-            log_p, mu, inv_sigma = batch_output(model_network, embeddings, batch)[:3]
-            print("last batch p:\n", torch.exp(log_p)[:6].detach().cpu().numpy())
-            print("last batch mu:\n", mu[:6].detach().cpu().numpy())
-            print("last batch sigma:\n", inv_sigma[:6].detach().cpu().numpy())
+def log_mean_error(output, target):
+    log_p, mu = output[:2]
+    mb_size, components, channels = mu.shape
+    combined_mu = torch.sum(
+        mu * torch.exp(log_p).unsqueeze(2).expand((mb_size, components, channels)),
+        dim=1,
+    )
+    mean_error = torch.mean(target.squeeze(2) - combined_mu, dim=0)
+    logging.info(f"mean_error: {mean_error}")
 
-    return log_batch_info
+
+def make_test_batch_logger():
+    def log_epoch(epoch, batch, output, target, loss):
+        if output:
+            log_p, mu, inv_sigma = output[:3]
+            logging.info(
+                f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}"
+            )
+            logging.info(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
+            logging.info(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
+
+            log_mean_error(output, target)
+
+    return log_epoch
 
 
-@click.command()
-@click.option(
-    "--model_file",
-    default=None,
-    show_default=True,
-    help="Output file name for trained model",
-)
-@click.option("--symbol", "-s", multiple=True, show_default=True)
-@click.option(
-    "--refresh",
-    is_flag=True,
-    default=False,
-    show_default=True,
-    help="Refresh stock data",
-)
-@click.option("--tune_embeddings", help="Load existing embedding file")
-@click.option(
-    "--just_embeddings",
-    is_flag=True,
-    default=False,
-    show_default=True,
-    help="Train only the embeddings",
-)
-@click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
-@click.option("--mixture_components", default=DEFAULT_MIXTURE_COMPONENTS, type=int)
-def main(
+def make_save_model(just_embeddings, model, encoding, symbols):
+    def save_model(epoch, epoch_loss, prefix=""):
+        wrapped_model = models.StockModelV2(
+            network=model,
+            symbols=symbols,
+            epochs=epoch,
+            date=dt.datetime.now(),
+            null_model_loss=null_model_loss,
+            loss=epoch_loss,
+        )
+
+        if not just_embeddings:
+            torch.save(wrapped_model, os.path.join(MODEL_ROOT, f"{prefix}model.pt"))
+
+        torch.save(
+            encoding,
+            os.path.join(MODEL_ROOT, f"{prefix}symbol_encodings.pt"),
+        )
+
+    return save_model
+
+
+def make_model_improvement_callback(just_embeddings, model, encoding, symbols):
+    save_model = make_save_model(just_embeddings, model, encoding, symbols)
+
+    def model_improvement_callback(epoch, epoch_loss):
+        save_model(epoch, epoch_loss)
+
+    return model_improvement_callback
+
+
+def make_epoch_callback(just_embeddings, model, encoding, symbols):
+    save_model = make_save_model(just_embeddings, model, encoding, symbols)
+
+    def epoch_callback(epoch, train_epoch_loss, test_epoch_loss):
+        logging.info(f"parameters: {(list(model.embedding.parameters()))}")
+        save_model(epoch, test_epoch_loss, prefix="last_")
+
+    return epoch_callback
+
+
+def do_batches(epoch, model, data_loader, loss_function, optim, training, callback):
+    model.train(training)
+    batch_losses = []
+
+    for batch, (predictors, target) in enumerate(data_loader):
+        model_output = model(predictors)
+        batch_loss = loss_function(model_output, target)
+        batch_losses.append(float(batch_loss))
+
+        if training:
+            optim.zero_grad()
+            batch_loss.backward()
+            optim.step()
+
+        callback(epoch, batch, model_output, target, float(batch_loss))
+
+    epoch_loss = float(np.mean(batch_losses))
+    return epoch_loss
+
+
+def run(
     model_file,
     symbol,
     refresh,
@@ -232,18 +266,18 @@ def main(
     window_size,
     mixture_components,
 ):
-    print(f"model_root: {MODEL_ROOT}")
-    print(f"device: {device}")
+    logging.debug(f"model_root: {MODEL_ROOT}")
+    logging.debug(f"device: {device}")
 
     # Rewrite symbols in `symbol` with uppercase versions
     symbol = list(map(str.upper, symbol))
 
-    print(f"model_file: {model_file}")
-    print(f"symbol: {symbol}")
-    print(f"refresh: {refresh}")
-    print(f"window_sizet: {window_size}")
+    logging.debug(f"model_file: {model_file}")
+    logging.debug(f"symbol: {symbol}")
+    logging.debug(f"refresh: {refresh}")
+    logging.debug(f"window_sizet: {window_size}")
 
-    print(f"Seed: {SEED}")
+    logging.debug(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
     model_network, parameters = load_or_create_model(
@@ -271,9 +305,10 @@ def main(
         model_network.train()
         parameters.extend(model_network.parameters())
 
-    print(parameters)
+    logging.info(f"parameters: {parameters}")
 
     encoding, train_loader, test_loader = prepare_data(symbol, window_size, refresh)
+    the_model = architecture.ModelWithEmbedding(model_network, embeddings)
 
     optim = torch.optim.Adam(
         parameters,
@@ -283,99 +318,109 @@ def main(
         weight_decay=WEIGHT_DECAY,
     )
 
+    # Initialize state for early termination monitoring
     best_test_loss = float("inf")
     best_epoch = -1
 
-    # Next line is here mainly to keep linter happy.
-    log_p = mu = inv_sigma = torch.tensor([])
+    loss_function = make_loss_function()
+    train_batch_callback = lambda epoch, batch, output, target, loss: None
+    test_batch_callback = make_test_batch_logger()
+    epoch_callback = make_epoch_callback(just_embeddings, the_model, encoding, symbol)
+    model_improvement_callback = make_model_improvement_callback(
+        just_embeddings, the_model, encoding, symbol
+    )
 
-    loss_function = make_loss_function(model_network, embeddings, device)
-    batch_logger = make_batch_logger(model_network, embeddings)
+    # This is the main epoch loop
+    for epoch in range(EPOCHS):
 
-    for e in range(EPOCHS):
-        batch_lossees_train = []
-
-        model_network.train()
-
-        batch = None
-        for predictors, target in train_loader:
-
-            loss = loss_function(predictors, target)[0]
-
-            optim.zero_grad()
-
-            # To debug Nans, uncomment following line:
-            # with torch.autograd.detect_anomaly():
-            loss.backward()
-
-            torch.nn.utils.clip_grad.clip_grad_norm_(
-                parameters, MAX_GRADIENT_NORM, norm_type=float("inf")
-            )
-            optim.step()
-
-            batch_lossees_train.append(float(loss))
-
-        if e % EPOCH_SHOW_PROGRESS_INTERVAL == 0:
-            batch_logger(batch)
-
-        print(list(embeddings.parameters()))
-
-        epoch_loss_train = float(np.mean(batch_lossees_train))
-        print(f"epoch {e} train loss: {epoch_loss_train:.4f}")
+        train_epoch_loss = do_batches(
+            epoch,
+            the_model,
+            train_loader,
+            loss_function,
+            optim,
+            True,
+            train_batch_callback,
+        )
 
         # Evalute the loss on the test set
-        batch_losses_test = []
-        batch_mean_errors_test = []
-
         # Don't compute gradients
         with torch.no_grad():
-            model_network.eval()
-
-            for predictors, target in test_loader:
-                batch_loss_test, epoch_mean_error_test = loss_function(
-                    predictors, target
-                )
-                batch_losses_test.append(float(batch_loss_test))
-                batch_mean_errors_test.append(float(epoch_mean_error_test))
-
-            epoch_loss_test = float(np.mean(batch_losses_test))
-            epoch_mean_error_test = float(np.mean(batch_mean_errors_test))
-
-            model = models.StockModelV2(
-                network=model_network,
-                symbols=symbol,
-                epochs=e,
-                date=dt.datetime.now(),
-                null_model_loss=null_model_loss,
-                loss=epoch_loss_test,
+            test_epoch_loss = do_batches(
+                epoch,
+                the_model,
+                test_loader,
+                loss_function,
+                optim,
+                False,
+                test_batch_callback,
             )
-            if epoch_loss_test < best_test_loss:
-                best_test_loss = epoch_loss_test
-                best_epoch = e
-                flag = "**"
 
-                if not just_embeddings:
-                    torch.save(model, os.path.join(MODEL_ROOT, "embedding_model.pt"))
+        epoch_callback(epoch, train_epoch_loss, test_epoch_loss)
+        logging.info(f"    Epoch {epoch}: loss (train): {train_epoch_loss:.4f}")
 
-                torch.save(embeddings, os.path.join(MODEL_ROOT, "embeddings.pt"))
-                torch.save(
-                    encoding,
-                    os.path.join(MODEL_ROOT, "symbol_encodings.pt"),
-                )
-            else:
-                flag = "  "
-            print(
-                f" {flag} epoch loss (test): {epoch_loss_test:.4f}  best epoch: {best_epoch}  best loss:({best_test_loss:.4f})) {flag}"
+        if test_epoch_loss < best_test_loss:
+            best_test_loss = test_epoch_loss
+            best_epoch = epoch
+            flag = "**"
+
+            model_improvement_callback(epoch, test_epoch_loss)
+        else:
+            flag = "  "
+        logging.info(
+            f" {flag} Epoch {epoch}: loss (test): {test_epoch_loss:.4f}  best epoch: {best_epoch}  best loss:{best_test_loss:.4f} {flag}"
+        )
+        if epoch >= best_epoch + EARLY_TERMINATION:
+            logging.info(
+                f"No improvement in {EARLY_TERMINATION} epochs.  Terminating early."
             )
-            print(f"    mean error (test): {epoch_mean_error_test:.7f}")
+            break  # Terminate early
 
-            torch.save(model, os.path.join(MODEL_ROOT, "last_embedding_model.pt"))
-            torch.save(embeddings, os.path.join(MODEL_ROOT, "last_embeddings.pt"))
-            torch.save(
-                encoding,
-                os.path.join(MODEL_ROOT, "last_symbol_encoding.pt"),
-            )
+
+@click.command()
+@click.option(
+    "--model_file",
+    default=None,
+    show_default=True,
+    help="Output file name for trained model",
+)
+@click.option("--symbol", "-s", multiple=True, show_default=True)
+@click.option(
+    "--refresh",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Refresh stock data",
+)
+@click.option("--tune_embeddings", help="Load existing embedding file")
+@click.option(
+    "--just_embeddings",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Train only the embeddings",
+)
+@click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
+@click.option("--mixture_components", default=DEFAULT_MIXTURE_COMPONENTS, type=int)
+def main_cli(
+    model_file,
+    symbol,
+    refresh,
+    tune_embeddings,
+    just_embeddings,
+    window_size,
+    mixture_components,
+):
+    run(
+        model_file,
+        symbol,
+        refresh,
+        tune_embeddings,
+        just_embeddings,
+        window_size,
+        mixture_components,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    main_cli()
