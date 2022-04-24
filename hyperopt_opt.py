@@ -57,7 +57,7 @@ def objective(parameters):
 
     loss = train_univariate.run(
         model_file=None,
-        symbol=SYMBOLS,
+        symbols=SYMBOLS,
         refresh=False,
         tune_embeddings=False,
         just_embeddings=False,
@@ -78,7 +78,7 @@ best = fmin(
     objective,
     space=search_space,
     algo=tpe.suggest,
-    max_evals=160,
+    max_evals=200,
     trials=trials,
 )
 print(trials.trials)

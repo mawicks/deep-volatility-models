@@ -1,6 +1,7 @@
 # Standard Python
 import datetime as dt
 import logging
+
 import os.path
 from typing import Iterable
 
@@ -20,32 +21,44 @@ import time_series_datasets
 import models
 import architecture
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, force=True)
 
 TRAIN_FRACTION = 0.80
 SEED = 24  # 42
 
-EPOCHS = 500  # 30000
-EARLY_TERMINATION = 20  # Was 1000
+EPOCHS = 1000  # 30000
+EARLY_TERMINATION = 100  # Was 1000
 
-DEFAULT_WINDOW_SIZE = 64
+LEARNING_RATE = 0.00075 * 0.50  # 2
+DROPOUT = 0.50
+FEATURE_DIMENSION = 40
+MIXTURE_COMPONENTS = 4  # Was 4, then 3
+WINDOW_SIZE = 64
 EMBEDDING_DIMENSION = 10  # Was 6
 MINIBATCH_SIZE = 75  # 64
-FEATURE_DIMENSION = 40
-DEFAULT_MIXTURE_COMPONENTS = 4  # Was 4, then 3
-DEFAULT_GAUSSIAN_NOISE = 0.0025
+GAUSSIAN_NOISE = 0.0025
+WEIGHT_DECAY = 5e-9  # 0.075
+
+# These were optimized with hyperopt
+OPT_LEARNING_RATE = 0.000689
+OPT_DROPOUT = 0.130894
+OPT_FEATURE_DIMENSION = 86
+OPT_MIXTURE_COMPONENTS = 3
+OPT_WINDOW_SIZE = 256
+OPT_EMBEDDING_DIMENSION = 3
+OPT_MINIBATCH_SIZE = 248
+OPT_GAUSSIAN_NOISE = 0.000226
+OPT_WEIGHT_DECAY = 8.489603e-07
 
 
-DROPOUT_P = 0.50
+# Following parameters haven't been optimized yet.
+
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8  # 1e-5
 USE_BATCH_NORM = False  # False
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
-
-LR = 0.00075 * 0.50  # 2
-WEIGHT_DECAY = 5e-9  # 0.075
 
 null_model_loss = float("inf")
 
@@ -60,14 +73,14 @@ device = torch.device(dev)
 
 
 def load_or_create_model(
-    window_size=DEFAULT_WINDOW_SIZE,
-    mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+    window_size=WINDOW_SIZE,
+    mixture_components=MIXTURE_COMPONENTS,
     feature_dimension=FEATURE_DIMENSION,
     embedding_dimension=EMBEDDING_DIMENSION,
-    gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
+    gaussian_noise=GAUSSIAN_NOISE,
     model_file=None,
     use_batch_norm=USE_BATCH_NORM,
-    dropout=DROPOUT_P,
+    dropout=DROPOUT,
 ):
     default_network_class = architecture.MixtureModel
 
@@ -142,7 +155,7 @@ def prepare_data(
             1 + window_size,
             create_channel_dim=True,
         )
-        logging.debug(f"{s} windowed_returns[0]: ", windowed_returns[0])
+        logging.debug(f"{s} windowed_returns[0]: {windowed_returns[0]}")
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
@@ -221,7 +234,9 @@ def make_test_batch_logger():
     return log_epoch
 
 
-def make_save_model(just_embeddings, model, encoding, symbols):
+def make_save_model(model_root, just_embeddings, model, encoding, symbols):
+    os.makedirs(model_root, exist_ok=True)
+
     def save_model(epoch, epoch_loss, prefix=""):
         wrapped_model = models.StockModelV2(
             network=model,
@@ -233,7 +248,7 @@ def make_save_model(just_embeddings, model, encoding, symbols):
         )
 
         if not just_embeddings:
-            torch.save(wrapped_model, os.path.join(MODEL_ROOT, f"{prefix}model.pt"))
+            torch.save(wrapped_model, os.path.join(model_root, f"{prefix}model.pt"))
 
         torch.save(
             encoding,
@@ -243,8 +258,10 @@ def make_save_model(just_embeddings, model, encoding, symbols):
     return save_model
 
 
-def make_model_improvement_callback(just_embeddings, model, encoding, symbols):
-    save_model = make_save_model(just_embeddings, model, encoding, symbols)
+def make_model_improvement_callback(
+    model_root, just_embeddings, model, encoding, symbols
+):
+    save_model = make_save_model(model_root, just_embeddings, model, encoding, symbols)
 
     def model_improvement_callback(epoch, epoch_loss):
         save_model(epoch, epoch_loss)
@@ -252,8 +269,8 @@ def make_model_improvement_callback(just_embeddings, model, encoding, symbols):
     return model_improvement_callback
 
 
-def make_epoch_callback(just_embeddings, model, encoding, symbols):
-    save_model = make_save_model(just_embeddings, model, encoding, symbols)
+def make_epoch_callback(model_root, just_embeddings, model, encoding, symbols):
+    save_model = make_save_model(model_root, just_embeddings, model, encoding, symbols)
 
     def epoch_callback(epoch, train_epoch_loss, test_epoch_loss):
         logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
@@ -284,35 +301,44 @@ def do_batches(epoch, model, data_loader, loss_function, optim, training, callba
 
 def run(
     model_file,
-    symbol,
+    symbols,
     refresh,
     tune_embeddings,
     just_embeddings,
-    window_size,
-    mixture_components,
-    feature_dimension=FEATURE_DIMENSION,
-    embedding_dimension=EMBEDDING_DIMENSION,
-    gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
-    minibatch_size=MINIBATCH_SIZE,
+    window_size=OPT_WINDOW_SIZE,
+    mixture_components=OPT_MIXTURE_COMPONENTS,
+    feature_dimension=OPT_FEATURE_DIMENSION,
+    embedding_dimension=OPT_EMBEDDING_DIMENSION,
+    gaussian_noise=OPT_GAUSSIAN_NOISE,
+    minibatch_size=OPT_MINIBATCH_SIZE,
+    dropout=OPT_DROPOUT,
+    learning_rate=OPT_LEARNING_RATE,
+    weight_decay=OPT_WEIGHT_DECAY,
     use_batch_norm=USE_BATCH_NORM,
-    dropout=DROPOUT_P,
-    learning_rate=LR,
-    weight_decay=WEIGHT_DECAY,
     max_epochs=EPOCHS,
     early_termination=EARLY_TERMINATION,
+    model_root=MODEL_ROOT,
 ):
-    logging.debug(f"model_root: {MODEL_ROOT}")
+    logging.debug(f"model_root: {model_root}")
     logging.debug(f"device: {device}")
 
     # Rewrite symbols in `symbol` with uppercase versions
-    symbol = list(map(str.upper, symbol))
+    symbols = list(map(str.upper, symbols))
 
-    logging.debug(f"model_file: {model_file}")
-    logging.debug(f"symbol: {symbol}")
-    logging.debug(f"refresh: {refresh}")
-    logging.debug(f"window_sizet: {window_size}")
+    logging.info(f"model_file: {model_file}")
+    logging.info(f"symbols: {symbols}")
+    logging.info(f"refresh: {refresh}")
+    logging.info(f"window_size: {window_size}")
+    logging.info(f"mixture_components: {mixture_components}")
+    logging.info(f"feature_dimension: {feature_dimension}")
+    logging.info(f"embedding_dimension: {embedding_dimension}")
+    logging.info(f"gaussian_noise: {gaussian_noise}")
+    logging.info(f"minibatch_size: {minibatch_size}")
+    logging.info(f"dropout: {dropout}")
+    logging.info(f"learning_rate: {learning_rate}")
+    logging.info(f"weight_decay: {weight_decay}")
 
-    logging.debug(f"Seed: {SEED}")
+    logging.info(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
     model_network, parameters = load_or_create_model(
@@ -327,7 +353,7 @@ def run(
     )
     model_network = model_network.to(device)
 
-    embeddings = torch.nn.Embedding(len(symbol), embedding_dimension)
+    embeddings = torch.nn.Embedding(len(symbols), embedding_dimension)
     embeddings = embeddings.to(device)
 
     if tune_embeddings:
@@ -348,7 +374,7 @@ def run(
     logging.debug(f"parameters: {parameters}")
 
     encoding, train_loader, test_loader = prepare_data(
-        symbol, window_size, refresh, minibatch_size=minibatch_size
+        symbols, window_size, refresh, minibatch_size=minibatch_size
     )
     the_model = architecture.ModelWithEmbedding(model_network, embeddings)
 
@@ -367,9 +393,11 @@ def run(
     loss_function = make_loss_function()
     train_batch_callback = lambda epoch, batch, output, target, loss: None
     test_batch_callback = make_test_batch_logger()
-    epoch_callback = make_epoch_callback(just_embeddings, the_model, encoding, symbol)
+    epoch_callback = make_epoch_callback(
+        model_root, just_embeddings, the_model, encoding, symbols
+    )
     model_improvement_callback = make_model_improvement_callback(
-        just_embeddings, the_model, encoding, symbol
+        model_root, just_embeddings, the_model, encoding, symbols
     )
 
     # This is the main epoch loop
@@ -436,7 +464,9 @@ def run(
     show_default=True,
     help="Refresh stock data",
 )
-@click.option("--tune_embeddings", help="Load existing embedding file")
+@click.option(
+    "--tune_embeddings", show_default=True, help="Load existing embedding file"
+)
 @click.option(
     "--just_embeddings",
     is_flag=True,
@@ -444,25 +474,64 @@ def run(
     show_default=True,
     help="Train only the embeddings",
 )
-@click.option("--window_size", default=DEFAULT_WINDOW_SIZE, type=int)
-@click.option("--mixture_components", default=DEFAULT_MIXTURE_COMPONENTS, type=int)
+@click.option(
+    "--learning_rate", default=OPT_LEARNING_RATE, show_default=True, type=float
+)
+@click.option("--dropout", default=OPT_DROPOUT, show_default=True, type=float)
+@click.option(
+    "--feature_dimension", default=OPT_FEATURE_DIMENSION, show_default=True, type=int
+)
+@click.option(
+    "--mixture_components", default=OPT_MIXTURE_COMPONENTS, show_default=True, type=int
+)
+@click.option("--window_size", default=OPT_WINDOW_SIZE, show_default=True, type=int)
+@click.option(
+    "--embedding_dimension",
+    default=OPT_EMBEDDING_DIMENSION,
+    show_default=True,
+    type=int,
+)
+@click.option(
+    "--minibatch_size", default=OPT_MINIBATCH_SIZE, show_default=True, type=int
+)
+@click.option(
+    "--gaussian_noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
+)
+@click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
+@click.option("--model_root", default=MODEL_ROOT, show_default=True)
 def main_cli(
     model_file,
     symbol,
     refresh,
     tune_embeddings,
     just_embeddings,
-    window_size,
+    learning_rate,
+    dropout,
+    feature_dimension,
     mixture_components,
+    window_size,
+    embedding_dimension,
+    minibatch_size,
+    gaussian_noise,
+    weight_decay,
+    model_root,
 ):
     run(
-        model_file,
-        symbol,
-        refresh,
-        tune_embeddings,
-        just_embeddings,
-        window_size,
-        mixture_components,
+        model_file=model_file,
+        symbols=symbol,
+        refresh=refresh,
+        tune_embeddings=tune_embeddings,
+        just_embeddings=just_embeddings,
+        learning_rate=learning_rate,
+        dropout=dropout,
+        feature_dimension=feature_dimension,
+        mixture_components=mixture_components,
+        window_size=window_size,
+        embedding_dimension=embedding_dimension,
+        minibatch_size=minibatch_size,
+        gaussian_noise=gaussian_noise,
+        weight_decay=weight_decay,
+        model_root=model_root,
         use_batch_norm=USE_BATCH_NORM,
     )
 
