@@ -252,7 +252,7 @@ def make_save_model(model_root, just_embeddings, model, encoding, symbols):
 
         torch.save(
             encoding,
-            os.path.join(MODEL_ROOT, f"{prefix}symbol_encodings.pt"),
+            os.path.join(model_root, f"{prefix}symbol_encodings.pt"),
         )
 
     return save_model
