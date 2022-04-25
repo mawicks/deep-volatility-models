@@ -442,7 +442,7 @@ def run(
         )
         if epoch >= best_epoch + early_termination:
             logging.info(
-                f"No improvement in {EARLY_TERMINATION} epochs.  Terminating early."
+                f"No improvement in {early_termination} epochs.  Terminating early."
             )
             break  # Terminate early
 
