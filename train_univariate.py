@@ -323,7 +323,7 @@ def run(
     logging.debug(f"device: {device}")
 
     # Rewrite symbols in `symbol` with uppercase versions
-    symbols = list(map(str.upper, symbols))
+    symbols = list(map(str.upper, set(symbols)))
 
     logging.info(f"model_file: {model_file}")
     logging.info(f"symbols: {symbols}")
