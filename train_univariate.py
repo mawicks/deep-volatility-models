@@ -24,39 +24,29 @@ import architecture
 logging.basicConfig(level=logging.INFO, force=True)
 
 TRAIN_FRACTION = 0.80
-SEED = 24  # 42
+SEED = 24  # Previously 42
 
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
-LEARNING_RATE = 0.00075 * 0.50  # 2
-DROPOUT = 0.50
-FEATURE_DIMENSION = 40
-MIXTURE_COMPONENTS = 4  # Was 4, then 3
-WINDOW_SIZE = 64
-EMBEDDING_DIMENSION = 10  # Was 6
-MINIBATCH_SIZE = 75  # 64
-GAUSSIAN_NOISE = 0.0025
-WEIGHT_DECAY = 5e-9  # 0.075
-
-# These were optimized with hyperopt
-OPT_LEARNING_RATE = 0.000689
-OPT_DROPOUT = 0.130894
-OPT_FEATURE_DIMENSION = 86
-OPT_MIXTURE_COMPONENTS = 3
-OPT_WINDOW_SIZE = 256
-OPT_EMBEDDING_DIMENSION = 3
-OPT_MINIBATCH_SIZE = 248
-OPT_GAUSSIAN_NOISE = 0.000226
-OPT_WEIGHT_DECAY = 8.489603e-07
+# Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
+OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
+OPT_DROPOUT = 0.130894  # Previously 0.50
+OPT_FEATURE_DIMENSION = 86  # Previously 40
+OPT_MIXTURE_COMPONENTS = 3  # Previously 4
+OPT_WINDOW_SIZE = 256  # Previously 64
+OPT_EMBEDDING_DIMENSION = 3  # Previously 10
+OPT_MINIBATCH_SIZE = 248  # Previously 75
+OPT_GAUSSIAN_NOISE = 0.000226  # Previously 0.0025
+OPT_WEIGHT_DECAY = 8.489603e-07  # Previously 5e-9
 
 
 # Following parameters haven't been optimized yet.
 
 BETA1 = 0.95
 BETA2 = 0.999
-ADAM_EPSILON = 1e-8  # 1e-5
-USE_BATCH_NORM = False  # False
+ADAM_EPSILON = 1e-8
+USE_BATCH_NORM = True
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
@@ -73,14 +63,14 @@ device = torch.device(dev)
 
 
 def load_or_create_model(
-    window_size=WINDOW_SIZE,
-    mixture_components=MIXTURE_COMPONENTS,
-    feature_dimension=FEATURE_DIMENSION,
-    embedding_dimension=EMBEDDING_DIMENSION,
-    gaussian_noise=GAUSSIAN_NOISE,
+    window_size=OPT_WINDOW_SIZE,
+    mixture_components=OPT_MIXTURE_COMPONENTS,
+    feature_dimension=OPT_FEATURE_DIMENSION,
+    embedding_dimension=OPT_EMBEDDING_DIMENSION,
+    gaussian_noise=OPT_GAUSSIAN_NOISE,
     model_file=None,
     use_batch_norm=USE_BATCH_NORM,
-    dropout=DROPOUT,
+    dropout=OPT_DROPOUT,
 ):
     default_network_class = architecture.MixtureModel
 
@@ -112,7 +102,7 @@ def prepare_data(
     symbol_list: Iterable[str],
     window_size: int,
     refresh: bool = False,
-    minibatch_size: int = MINIBATCH_SIZE,
+    minibatch_size: int = OPT_MINIBATCH_SIZE,
 ):
     # Refresh historical data
     logging.info("Reading historical data")
@@ -341,6 +331,10 @@ def run(
     logging.info(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
+    encoding, train_loader, test_loader = prepare_data(
+        symbols, window_size, refresh, minibatch_size=minibatch_size
+    )
+
     model_network, parameters = load_or_create_model(
         window_size=window_size,
         mixture_components=mixture_components,
@@ -373,9 +367,6 @@ def run(
 
     logging.debug(f"parameters: {parameters}")
 
-    encoding, train_loader, test_loader = prepare_data(
-        symbols, window_size, refresh, minibatch_size=minibatch_size
-    )
     the_model = architecture.ModelWithEmbedding(model_network, embeddings)
 
     optim = torch.optim.Adam(
