@@ -308,6 +308,8 @@ def run(
     max_epochs=EPOCHS,
     early_termination=EARLY_TERMINATION,
     model_root=MODEL_ROOT,
+    beta1=BETA1,
+    beta2=BETA2,
 ):
     logging.debug(f"model_root: {model_root}")
     logging.debug(f"device: {device}")
@@ -327,6 +329,9 @@ def run(
     logging.info(f"dropout: {dropout}")
     logging.info(f"learning_rate: {learning_rate}")
     logging.info(f"weight_decay: {weight_decay}")
+    logging.info(f"use_batch_norm: {use_batch_norm}")
+    logging.info(f"ADAM beta1: {beta1}")
+    logging.info(f"ADAM beta2: {beta2}")
 
     logging.info(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
@@ -373,7 +378,7 @@ def run(
         parameters,
         lr=learning_rate,
         eps=ADAM_EPSILON,
-        betas=(BETA1, BETA2),
+        betas=(beta1, beta2),
         weight_decay=weight_decay,
     )
 
@@ -523,7 +528,6 @@ def main_cli(
         gaussian_noise=gaussian_noise,
         weight_decay=weight_decay,
         model_root=model_root,
-        use_batch_norm=USE_BATCH_NORM,
     )
 
 
