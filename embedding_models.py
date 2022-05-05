@@ -2,7 +2,7 @@
 import torch
 
 # Local packages
-import models
+import model_wrappers
 
 
 class SingleSymbolModelFromEmbedding(torch.nn.Module):
@@ -25,18 +25,18 @@ class SingleSymbolModelFromEmbedding(torch.nn.Module):
         return self.network.dimensions()
 
 
-def SingleSymbolModelFactory(encoding, model_with_embedding):
-    model = model_with_embedding.network.model
-    embeddings = model_with_embedding.network.embedding
+def SingleSymbolModelFactory(encoding, wrapped_model):
+    model = wrapped_model.network.model
+    embeddings = wrapped_model.network.embedding
 
     def single_symbol_model(symbol):
         this_embedding = embeddings(torch.tensor(encoding[symbol])).detach()
-        return models.StockModel(
+        return model_wrappers.StockModel(
             symbols=(symbol.upper(),),
             network=SingleSymbolModelFromEmbedding(model, this_embedding),
-            date=model_with_embedding.date,
-            epochs=model_with_embedding.epochs,
-            loss=model_with_embedding.loss,
+            date=wrapped_model.date,
+            epochs=wrapped_model.epochs,
+            loss=wrapped_model.loss,
         )
 
     return single_symbol_model

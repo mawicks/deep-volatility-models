@@ -158,9 +158,8 @@ def run(
     logging.info(f"symbol: {symbol}")
 
     wrapped_model = torch.load(os.path.join(model_dir, "model.pt"))
-    encoding = torch.load(os.path.join(model_dir, "symbol_encodings.pt"))
     single_symbol_model_factory = embedding_models.SingleSymbolModelFactory(
-        encoding, wrapped_model
+        wrapped_model.encoding, wrapped_model
     )
 
     # symbols_to_process = list(set(symbol).difference(exclude_symbols))

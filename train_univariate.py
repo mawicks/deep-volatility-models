@@ -3,7 +3,7 @@ import datetime as dt
 import logging
 
 import os.path
-from typing import Iterable
+from typing import Dict, Iterable
 
 # Common packages
 import click
@@ -18,7 +18,7 @@ import data_sources
 import stock_data
 import mixture_model_stats
 import time_series_datasets
-import models
+import model_wrappers
 import architecture
 
 logging.basicConfig(level=logging.INFO, force=True)
@@ -50,8 +50,6 @@ USE_BATCH_NORM = True
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
-null_model_loss = float("inf")
-
 ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
 MODEL_ROOT = os.path.join(ROOT_PATH, "models")
 
@@ -62,44 +60,96 @@ else:
 device = torch.device(dev)
 
 
-def load_or_create_model(
+def create_new_model(
+    embedding_size=None,
     window_size=OPT_WINDOW_SIZE,
     mixture_components=OPT_MIXTURE_COMPONENTS,
     feature_dimension=OPT_FEATURE_DIMENSION,
     embedding_dimension=OPT_EMBEDDING_DIMENSION,
     gaussian_noise=OPT_GAUSSIAN_NOISE,
-    model_file=None,
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
 ):
     default_network_class = architecture.MixtureModel
 
-    try:
-        model = torch.load(model_file)
-        network = model.network
-        logging.info(f"Loaded model from file: {model_file}")
+    network = default_network_class(
+        window_size,
+        1,
+        feature_dimension=feature_dimension,
+        mixture_components=mixture_components,
+        exogenous_dimension=embedding_dimension,
+        gaussian_noise=gaussian_noise,
+        dropout=dropout,
+        use_batch_norm=use_batch_norm,
+        activation=ACTIVATION,
+    )
+    embedding = torch.nn.Embedding(embedding_size, embedding_dimension)
 
-    except Exception:
-        network = default_network_class(
-            window_size,
-            1,
-            feature_dimension=feature_dimension,
-            mixture_components=mixture_components,
-            exogenous_dimension=embedding_dimension,
-            gaussian_noise=gaussian_noise,
-            dropout=dropout,
-            use_batch_norm=use_batch_norm,
-            activation=ACTIVATION,
+    return network, embedding
+
+
+def load_existing_model(existing_model, symbols):
+    """
+    This function loads an existing model and adjusts its embedding
+    and encoding objects to accomodate any new symbols in `symbols`
+
+    Arguments:
+        existing_model: path - path to existing model
+        symbols: List[str] - list of symbols to be trained.
+
+    Returns:
+        model_network: torch.Module
+        embeddings: torch.Embedding
+        encoding: Dict[str, i] - encoding
+
+    Note the list of symbols is required so that the embedding can be extended
+    (with values to be trained) to accomodate the new symbol list.
+
+    """
+
+    model = torch.load(existing_model)
+    # Dump the old wrapper and keep only the network and the embeddings
+    # We'll create a new wrapper
+    model_network = model.network
+    embeddings = model.embedding
+    encoding = model.encoding
+
+    # If there are new symbols since the previous model was trained,
+    # extend the encoding and initialize the new embeddings with the
+    # mean of the old embedding.  This initialization seems to work
+    # better than a random initialization with using a pre-trained
+    # model
+
+    new_symbols = set(symbols).difference(set(embeddings.keys()))
+
+    if len(new_symbols) > 0:
+        # Extend the encoding for any symbols unknown to the pre-loaded model
+        for s in new_symbols:
+            encoding[s] = len(encoding)
+
+        # Extend the embedding for any symbols unknown to the pre-loaded model
+        embedding_parameters = next(embeddings.parameters())
+        mean_embedding = embedding_parameters.mean(dim=0)
+        # Extract and use old embedding dimension
+        old_embedding_dimension = embedding_parameters.shape[1]
+
+        new_embeddings = (
+            mean_embedding.unsqueeze(0)
+            .expand(len(new_symbols), old_embedding_dimension)
+            .clone()
         )
-        logging.info("Initialized new model")
 
-    parameters = list(network.parameters())
+        # Extend the mean to current number of symbols
+        embedding_parameters.data = torch.concat(
+            (embedding_parameters, new_embeddings), dim=0
+        )
 
-    return network, parameters
+    return model_network, embeddings, encoding
 
 
 def prepare_data(
     symbol_list: Iterable[str],
+    encoding: Dict[str, int],
     window_size: int,
     refresh: bool = False,
     minibatch_size: int = OPT_MINIBATCH_SIZE,
@@ -107,7 +157,6 @@ def prepare_data(
     # Refresh historical data
     logging.info("Reading historical data")
     splits_by_symbol = {}
-    symbol_encoding = {}
 
     data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
     data_source = data_sources.YFinanceSource()
@@ -127,8 +176,8 @@ def prepare_data(
 
     skip = 256 - window_size
 
-    for i, s in enumerate(symbol_list):
-        symbol_encoding[s] = i
+    for s in symbol_list:
+        i = encoding[s]
 
         # history_loader can load many symbols at once for multivariate
         # but here we just load the single symbol of interest.  Since we expect
@@ -175,7 +224,7 @@ def prepare_data(
         test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=True
     )
 
-    return symbol_encoding, train_dataloader, test_dataloader
+    return train_dataloader, test_dataloader
 
 
 def make_loss_function():
@@ -224,34 +273,28 @@ def make_test_batch_logger():
     return log_epoch
 
 
-def make_save_model(model_root, just_embeddings, model, encoding, symbols):
+def make_save_model(model_root, only_embeddings, model, encoding, symbols):
     os.makedirs(model_root, exist_ok=True)
 
     def save_model(epoch, epoch_loss, prefix=""):
-        wrapped_model = models.StockModelV2(
-            network=model,
+        wrapped_model = model_wrappers.StockModel(
             symbols=symbols,
+            encoding=encoding,
+            network=model,
             epochs=epoch,
             date=dt.datetime.now(),
-            null_model_loss=null_model_loss,
             loss=epoch_loss,
         )
 
-        if not just_embeddings:
-            torch.save(wrapped_model, os.path.join(model_root, f"{prefix}model.pt"))
-
-        torch.save(
-            encoding,
-            os.path.join(model_root, f"{prefix}symbol_encodings.pt"),
-        )
+        torch.save(wrapped_model, os.path.join(model_root, f"{prefix}model.pt"))
 
     return save_model
 
 
 def make_model_improvement_callback(
-    model_root, just_embeddings, model, encoding, symbols
+    model_root, only_embeddings, model, encoding, symbols
 ):
-    save_model = make_save_model(model_root, just_embeddings, model, encoding, symbols)
+    save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
 
     def model_improvement_callback(epoch, epoch_loss):
         save_model(epoch, epoch_loss)
@@ -259,8 +302,8 @@ def make_model_improvement_callback(
     return model_improvement_callback
 
 
-def make_epoch_callback(model_root, just_embeddings, model, encoding, symbols):
-    save_model = make_save_model(model_root, just_embeddings, model, encoding, symbols)
+def make_epoch_callback(model_root, only_embeddings, model, encoding, symbols):
+    save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
 
     def epoch_callback(epoch, train_epoch_loss, test_epoch_loss):
         logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
@@ -290,11 +333,11 @@ def do_batches(epoch, model, data_loader, loss_function, optim, training, callba
 
 
 def run(
-    model_file,
+    existing_model,
     symbols,
     refresh,
-    tune_embeddings,
-    just_embeddings,
+    new_embeddings,
+    only_embeddings,
     window_size=OPT_WINDOW_SIZE,
     mixture_components=OPT_MIXTURE_COMPONENTS,
     feature_dimension=OPT_FEATURE_DIMENSION,
@@ -314,10 +357,10 @@ def run(
     logging.debug(f"model_root: {model_root}")
     logging.debug(f"device: {device}")
 
-    # Rewrite symbols in `symbol` with uppercase versions
+    # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
 
-    logging.info(f"model_file: {model_file}")
+    logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
     logging.info(f"window_size: {window_size}")
@@ -336,35 +379,45 @@ def run(
     logging.info(f"Seed: {SEED}")
     torch.random.manual_seed(SEED)
 
-    encoding, train_loader, test_loader = prepare_data(
-        symbols, window_size, refresh, minibatch_size=minibatch_size
+    # Do split first so that any subsequent random number generator
+    # calls won't affect the split.  We want the splits to be the same
+    # for different architecutre parameters to provide fair
+    # comparisons of different architectures on the same split.
+
+    model_network = embeddings = None
+    if existing_model:
+        model_network, embeddings, encoding = load_existing_model(
+            existing_model, symbols
+        )
+        logging.info(f"Loaded model from file: {existing_model}")
+    else:
+        encoding = {s: i for i, s in enumerate(symbols)}
+
+    logging.info(f"Encoding: {encoding}")
+
+    train_loader, test_loader = prepare_data(
+        symbols, encoding, window_size, refresh, minibatch_size=minibatch_size
     )
 
-    model_network, parameters = load_or_create_model(
-        window_size=window_size,
-        mixture_components=mixture_components,
-        feature_dimension=feature_dimension,
-        embedding_dimension=embedding_dimension,
-        gaussian_noise=gaussian_noise,
-        model_file=model_file,
-        use_batch_norm=use_batch_norm,
-        dropout=dropout,
-    )
-    model_network = model_network.to(device)
+    if model_network is None:
+        model_network, embeddings = create_new_model(
+            embedding_size=len(symbols),
+            window_size=window_size,
+            mixture_components=mixture_components,
+            feature_dimension=feature_dimension,
+            embedding_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            use_batch_norm=use_batch_norm,
+            dropout=dropout,
+        )
+        logging.info("Initialized new model")
 
-    embeddings = torch.nn.Embedding(len(symbols), embedding_dimension)
-    embeddings = embeddings.to(device)
-
-    if tune_embeddings:
-        old_embeddings = next(torch.load(tune_embeddings).parameters())
-        mean_embedding = old_embeddings.mean(dim=0)
-        new_embeddings = next(embeddings.parameters())
-        n, m = new_embeddings.shape
-        new_embeddings.data = mean_embedding.unsqueeze(0).expand(n, m).clone()
-
+    # Generate list of parameters we choose to train.
+    # We always tune or train the embeddings:
     parameters = list(embeddings.parameters())
 
-    if just_embeddings:
+    # Add rest of model parameters unless we're training only the embeddings.
+    if only_embeddings:
         model_network.eval()
     else:
         model_network.train()
@@ -373,6 +426,7 @@ def run(
     logging.debug(f"parameters: {parameters}")
 
     the_model = architecture.ModelWithEmbedding(model_network, embeddings)
+    the_model.to(device)
 
     optim = torch.optim.Adam(
         parameters,
@@ -390,10 +444,10 @@ def run(
     train_batch_callback = lambda epoch, batch, output, target, loss: None
     test_batch_callback = make_test_batch_logger()
     epoch_callback = make_epoch_callback(
-        model_root, just_embeddings, the_model, encoding, symbols
+        model_root, only_embeddings, the_model, encoding, symbols
     )
     model_improvement_callback = make_model_improvement_callback(
-        model_root, just_embeddings, the_model, encoding, symbols
+        model_root, only_embeddings, the_model, encoding, symbols
     )
 
     # This is the main epoch loop
@@ -447,10 +501,10 @@ def run(
 
 @click.command()
 @click.option(
-    "--model_file",
+    "--existing_model",
     default=None,
     show_default=True,
-    help="Output file name for trained model",
+    help="Existing model to load (for tuning).",
 )
 @click.option("--symbol", "-s", multiple=True, show_default=True)
 @click.option(
@@ -461,10 +515,12 @@ def run(
     help="Refresh stock data",
 )
 @click.option(
-    "--tune_embeddings", show_default=True, help="Load existing embedding file"
+    "--new_embeddings",
+    is_flag=True,
+    help="Generate new embeddings based on mean of pre-existing ones.",
 )
 @click.option(
-    "--just_embeddings",
+    "--only_embeddings",
     is_flag=True,
     default=False,
     show_default=True,
@@ -496,11 +552,11 @@ def run(
 @click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
 @click.option("--model_root", default=MODEL_ROOT, show_default=True)
 def main_cli(
-    model_file,
+    existing_model,
     symbol,
     refresh,
-    tune_embeddings,
-    just_embeddings,
+    new_embeddings,
+    only_embeddings,
     learning_rate,
     dropout,
     feature_dimension,
@@ -513,11 +569,11 @@ def main_cli(
     model_root,
 ):
     run(
-        model_file=model_file,
+        existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
-        tune_embeddings=tune_embeddings,
-        just_embeddings=just_embeddings,
+        new_embeddings=new_embeddings,
+        only_embeddings=only_embeddings,
         learning_rate=learning_rate,
         dropout=dropout,
         feature_dimension=feature_dimension,
