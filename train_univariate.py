@@ -212,7 +212,7 @@ def prepare_data(
     train_dataset = torch.utils.data.ConcatDataset(
         [splits_by_symbol[s]["train"] for s in symbol_list]
     )
-    test_dataset = torch.utils.data.ConcatDataset(
+    validation_dataset = torch.utils.data.ConcatDataset(
         [splits_by_symbol[s]["test"] for s in symbol_list]
     )
 
@@ -220,11 +220,14 @@ def prepare_data(
         train_dataset, batch_size=minibatch_size, drop_last=True, shuffle=True
     )
 
-    test_dataloader = torch.utils.data.dataloader.DataLoader(
-        test_dataset, batch_size=len(test_dataset), drop_last=True, shuffle=True
+    validation_dataloader = torch.utils.data.dataloader.DataLoader(
+        validation_dataset,
+        batch_size=len(validation_dataset),
+        drop_last=True,
+        shuffle=True,
     )
 
-    return train_dataloader, test_dataloader
+    return train_dataloader, validation_dataloader
 
 
 def make_loss_function():
@@ -258,7 +261,7 @@ def log_mean_error(output, target):
     logging.info(f"mean_error: {mean_error}")
 
 
-def make_test_batch_logger():
+def make_validation_batch_logger():
     def log_epoch(epoch, batch, output, target, loss):
         if output:
             log_p, mu, inv_sigma = output[:3]
@@ -305,9 +308,9 @@ def make_model_improvement_callback(
 def make_epoch_callback(model_root, only_embeddings, model, encoding, symbols):
     save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
 
-    def epoch_callback(epoch, train_epoch_loss, test_epoch_loss):
+    def epoch_callback(epoch, train_epoch_loss, validation_epoch_loss):
         logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
-        save_model(epoch, test_epoch_loss, prefix="last_")
+        save_model(epoch, validation_epoch_loss, prefix="last_")
 
     return epoch_callback
 
@@ -395,7 +398,7 @@ def run(
 
     logging.info(f"Encoding: {encoding}")
 
-    train_loader, test_loader = prepare_data(
+    train_loader, validation_loader = prepare_data(
         symbols, encoding, window_size, refresh, minibatch_size=minibatch_size
     )
 
@@ -437,12 +440,12 @@ def run(
     )
 
     # Initialize state for early termination monitoring
-    best_test_loss = float("inf")
+    best_validation_loss = float("inf")
     best_epoch = -1
 
     loss_function = make_loss_function()
     train_batch_callback = lambda epoch, batch, output, target, loss: None
-    test_batch_callback = make_test_batch_logger()
+    validation_batch_callback = make_validation_batch_logger()
     epoch_callback = make_epoch_callback(
         model_root, only_embeddings, the_model, encoding, symbols
     )
@@ -466,29 +469,29 @@ def run(
         # Evalute the loss on the test set
         # Don't compute gradients
         with torch.no_grad():
-            test_epoch_loss = do_batches(
+            validation_epoch_loss = do_batches(
                 epoch,
                 the_model,
-                test_loader,
+                validation_loader,
                 loss_function,
                 optim,
                 False,
-                test_batch_callback,
+                validation_batch_callback,
             )
 
-        epoch_callback(epoch, train_epoch_loss, test_epoch_loss)
+        epoch_callback(epoch, train_epoch_loss, validation_epoch_loss)
         logging.info(f"    Epoch {epoch}: loss (train): {train_epoch_loss:.4f}")
 
-        if test_epoch_loss < best_test_loss:
-            best_test_loss = test_epoch_loss
+        if validation_epoch_loss < best_validation_loss:
+            best_validation_loss = validation_epoch_loss
             best_epoch = epoch
             flag = "**"
 
-            model_improvement_callback(epoch, test_epoch_loss)
+            model_improvement_callback(epoch, validation_epoch_loss)
         else:
             flag = "  "
         logging.info(
-            f" {flag} Epoch {epoch}: loss (test): {test_epoch_loss:.4f}  best epoch: {best_epoch}  best loss:{best_test_loss:.4f} {flag}"
+            f" {flag} Epoch {epoch}: loss (test): {validation_epoch_loss:.4f}  best epoch: {best_epoch}  best loss:{best_validation_loss:.4f} {flag}"
         )
         if epoch >= best_epoch + early_termination:
             logging.info(
@@ -496,7 +499,7 @@ def run(
             )
             break  # Terminate early
 
-    return best_test_loss
+    return best_validation_loss
 
 
 @click.command()
