@@ -295,7 +295,7 @@ def make_save_model(model_root, only_embeddings, model, encoding, symbols):
     return save_model
 
 
-def make_model_improvement_callback(
+def make_loss_improvement_callback(
     model_root, only_embeddings, model, encoding, symbols
 ):
     save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
@@ -420,12 +420,11 @@ def run(
     )
 
     loss_function = make_loss_function()
-    train_batch_callback = lambda epoch, batch, output, target, loss: None
     validation_batch_callback = make_validation_batch_logger()
     epoch_callback = make_epoch_callback(
         model_root, only_embeddings, the_model, encoding, symbols
     )
-    model_improvement_callback = make_model_improvement_callback(
+    loss_improvement_callback = make_loss_improvement_callback(
         model_root, only_embeddings, the_model, encoding, symbols
     )
 
@@ -436,7 +435,6 @@ def run(
         train_loader=train_loader,
         validation_loader=validation_loader,
         max_epochs=max_epochs,
-        train_batch_callback=train_batch_callback,
         validation_batch_callback=validation_batch_callback,
         epoch_callback=epoch_callback,
     )
