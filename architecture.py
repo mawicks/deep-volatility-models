@@ -432,7 +432,11 @@ class ModelWithEmbedding(torch.nn.Module):
     tuple passed to forward() whereas the combined_model accpets an integer encoding.
     """
 
-    def __init__(self, model: torch.nn.Module, embedding: torch.nn.Embedding):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        embedding: torch.nn.Embedding,
+    ):
         """
         Arguments:
             model: torch.nn.Module - The model to which embeddings are to be

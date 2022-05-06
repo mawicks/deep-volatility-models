@@ -2,7 +2,7 @@
 import datetime as dt
 import logging
 
-import os.path
+import os
 from typing import Dict, Iterable
 
 # Common packages
@@ -20,6 +20,7 @@ import mixture_model_stats
 import time_series_datasets
 import model_wrappers
 import architecture
+import training
 
 logging.basicConfig(level=logging.INFO, force=True)
 
@@ -308,38 +309,17 @@ def make_model_improvement_callback(
 def make_epoch_callback(model_root, only_embeddings, model, encoding, symbols):
     save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
 
-    def epoch_callback(epoch, train_epoch_loss, validation_epoch_loss):
+    def epoch_callback(epoch, train_loss, validation_loss):
         logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
-        save_model(epoch, validation_epoch_loss, prefix="last_")
+        save_model(epoch, validation_loss, prefix="last_")
 
     return epoch_callback
-
-
-def do_batches(epoch, model, data_loader, loss_function, optim, training, callback):
-    model.train(training)
-    batch_losses = []
-
-    for batch, (predictors, target) in enumerate(data_loader):
-        model_output = model(predictors)
-        batch_loss = loss_function(model_output, target)
-        batch_losses.append(float(batch_loss))
-
-        if training:
-            optim.zero_grad()
-            batch_loss.backward()
-            optim.step()
-
-        callback(epoch, batch, model_output, target, float(batch_loss))
-
-    epoch_loss = float(np.mean(batch_losses))
-    return epoch_loss
 
 
 def run(
     existing_model,
     symbols,
     refresh,
-    new_embeddings,
     only_embeddings,
     window_size=OPT_WINDOW_SIZE,
     mixture_components=OPT_MIXTURE_COMPONENTS,
@@ -402,7 +382,7 @@ def run(
         symbols, encoding, window_size, refresh, minibatch_size=minibatch_size
     )
 
-    if model_network is None:
+    if model_network is None or embeddings is None:
         model_network, embeddings = create_new_model(
             embedding_size=len(symbols),
             window_size=window_size,
@@ -439,10 +419,6 @@ def run(
         weight_decay=weight_decay,
     )
 
-    # Initialize state for early termination monitoring
-    best_validation_loss = float("inf")
-    best_epoch = -1
-
     loss_function = make_loss_function()
     train_batch_callback = lambda epoch, batch, output, target, loss: None
     validation_batch_callback = make_validation_batch_logger()
@@ -453,52 +429,20 @@ def run(
         model_root, only_embeddings, the_model, encoding, symbols
     )
 
-    # This is the main epoch loop
-    for epoch in range(max_epochs):
-
-        train_epoch_loss = do_batches(
-            epoch,
-            the_model,
-            train_loader,
-            loss_function,
-            optim,
-            True,
-            train_batch_callback,
-        )
-
-        # Evalute the loss on the test set
-        # Don't compute gradients
-        with torch.no_grad():
-            validation_epoch_loss = do_batches(
-                epoch,
-                the_model,
-                validation_loader,
-                loss_function,
-                optim,
-                False,
-                validation_batch_callback,
-            )
-
-        epoch_callback(epoch, train_epoch_loss, validation_epoch_loss)
-        logging.info(f"    Epoch {epoch}: loss (train): {train_epoch_loss:.4f}")
-
-        if validation_epoch_loss < best_validation_loss:
-            best_validation_loss = validation_epoch_loss
-            best_epoch = epoch
-            flag = "**"
-
-            model_improvement_callback(epoch, validation_epoch_loss)
-        else:
-            flag = "  "
-        logging.info(
-            f" {flag} Epoch {epoch}: loss (test): {validation_epoch_loss:.4f}  best epoch: {best_epoch}  best loss:{best_validation_loss:.4f} {flag}"
-        )
-        if epoch >= best_epoch + early_termination:
-            logging.info(
-                f"No improvement in {early_termination} epochs.  Terminating early."
-            )
-            break  # Terminate early
-
+    best_validation_loss, best_epoch = training.train(
+        model=the_model,
+        loss_function=loss_function,
+        optim=optim,
+        train_loader=train_loader,
+        validation_loader=validation_loader,
+        max_epochs=max_epochs,
+        train_batch_callback=train_batch_callback,
+        validation_batch_callback=validation_batch_callback,
+        epoch_callback=epoch_callback,
+    )
+    logging.info(
+        f"Training terminated. Best epoch: {best_epoch}; Best validation loss: {best_validation_loss}"
+    )
     return best_validation_loss
 
 
@@ -516,11 +460,6 @@ def run(
     default=False,
     show_default=True,
     help="Refresh stock data",
-)
-@click.option(
-    "--new_embeddings",
-    is_flag=True,
-    help="Generate new embeddings based on mean of pre-existing ones.",
 )
 @click.option(
     "--only_embeddings",
@@ -558,7 +497,6 @@ def main_cli(
     existing_model,
     symbol,
     refresh,
-    new_embeddings,
     only_embeddings,
     learning_rate,
     dropout,
@@ -575,7 +513,6 @@ def main_cli(
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
-        new_embeddings=new_embeddings,
         only_embeddings=only_embeddings,
         learning_rate=learning_rate,
         dropout=dropout,
