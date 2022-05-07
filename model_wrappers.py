@@ -1,13 +1,13 @@
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Dict, Tuple
 
 import torch
 
 
 @dataclass
 class StockModel:
-    symbols: List[str]
+    symbols: Tuple[str]
     network: torch.nn.Module
     date: dt.datetime
     epochs: int
