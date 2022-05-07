@@ -1,21 +1,9 @@
-from typing import Any
+# Standard importors
+from typing import Any, Callable, Tuple, Union
 
+# Third party modules
 import torch
 import torch.nn
-
-
-# Mixture tuning parametrers
-DEFAULT_MIXTURE_FEATURES = 20  # May be overrideen by caller
-DEFAULT_MIXTURE_COMPONENTS = 4  # May be overridden by caller
-
-DEFAULT_GAUSSIAN_NOISE = 0.0025
-DEFAULT_DROPOUT_P = 0.125
-DEFAULT_BATCH_EPS = 1e-4
-
-MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
-SIGMA_INV_CLAMP = 1000.0
-
-logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 # Instances of various activation functions for convenience
 relu = torch.nn.ReLU()
@@ -23,11 +11,26 @@ softplus = torch.nn.Softplus()
 sigmoid = torch.nn.Sigmoid()
 tanh = torch.nn.Tanh()
 
+# Default values for Tuning parametrers
+DEFAULT_FEATURE_DIMENSION = 20  # May be overrideen by caller
+DEFAULT_MIXTURE_COMPONENTS = 4  # May be overridden by caller
+DEFAULT_GAUSSIAN_NOISE = 0.0025
+DEFAULT_DROPOUT_P = 0.125
+DEFAULT_ACTIVATION_FUNCTION = relu
 
-def batch_norm_factory_1d(feature_dimension, use_batch_norm):
+BATCH_NORM_EPS = 1e-4
+MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
+SIGMA_INV_CLAMP = 1000.0
+
+logsoftmax = torch.nn.LogSoftmax(dim=1)
+
+
+def batch_norm_factory_1d(
+    feature_dimension: int, use_batch_norm: bool
+) -> torch.nn.Module:
     """Generate a batchnorm layer or generate a null layer as appropriate"""
     if use_batch_norm:
-        return torch.nn.BatchNorm1d(feature_dimension, eps=DEFAULT_BATCH_EPS)
+        return torch.nn.BatchNorm1d(feature_dimension, eps=BATCH_NORM_EPS)
     else:
         return torch.nn.Sequential()
 
@@ -42,7 +45,7 @@ class MinMaxClamping(torch.nn.Module):
         self.training_max = None
         self.training_min = None
 
-    def forward(self, input_tensor):
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         if self.training:
             batch_max = torch.max(input_tensor, dim=0)[0].detach()
             batch_min = torch.min(input_tensor, dim=0)[0].detach()
@@ -72,7 +75,7 @@ class GaussianNoise(torch.nn.Module):
         super().__init__()
         self.sigma = sigma
 
-    def forward(self, input_tensor):
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         if self.training:
             return input_tensor + self.sigma * torch.randn(input_tensor.shape).to(
                 input_tensor.device
@@ -86,20 +89,20 @@ class TimeSeriesFeatures(torch.nn.Module):
     """
 
     @property
-    def window_size(self):
+    def window_size(self) -> int:
         return int(self._window_size)
 
     def __init__(
         self,
         input_channels: int,
         window_size: int,
-        feature_dimension: int = DEFAULT_MIXTURE_FEATURES,
         exogenous_dimension: int = 0,
+        feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
+        activation: torch.nn.Module = DEFAULT_ACTIVATION_FUNCTION,
         gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
-        activation=relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
-        extra_mixing_layers=0,
+        extra_mixing_layers: int = 0,
     ):
         super().__init__()
 
@@ -110,7 +113,7 @@ class TimeSeriesFeatures(torch.nn.Module):
             torch.tensor(window_size), requires_grad=False
         )
 
-        def conv_block(input_channels, width):
+        def conv_block(input_channels: int, width: int):
             return [
                 torch.nn.Conv1d(
                     input_channels,
@@ -179,12 +182,15 @@ class TimeSeriesFeatures(torch.nn.Module):
 
         self.blend_exogenous = torch.nn.Sequential(*blend_exogenous_layers)
 
-    def forward(self, window, exogenous=None):
+    def forward(
+        self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
+    ):
         """
         Argument:
-           context: (minibatch_size, channels, window_size)
+           window: torch.Tensor of shape (minibatch_size, channels, window_size)
+           exogenous: torch.Tensor to be mixed in or None
         Returns:
-           latents - (minibatch_size, feature_dimension)
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
         """
         batch_size = window.shape[0]
 
@@ -225,10 +231,10 @@ class UnivariateHead(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels,
-        output_channels=None,
-        feature_dimension=DEFAULT_MIXTURE_FEATURES,
-        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+        input_channels: int,
+        output_channels: Union[int, None],
+        feature_dimension: int,
+        mixture_components: int,
     ):
         super().__init__()
 
@@ -244,14 +250,14 @@ class UnivariateHead(torch.nn.Module):
         self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
         self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)
 
-    def forward(self, latents):
+    def forward(self, latents: torch.Tensor):
         """
         Argument:
-           latents: (minibatch_size, feature_dimension)
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
         Returns:
-           log_p: (minibatch_size, components)
-           mu: (minibatch_size, components, output_symbols)
-           sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
+           log_p: torch.Tensor of shape (minibatch_size, components)
+           mu: torch.Tensor of shape (minibatch_size, components, output_symbols)
+           sigma_inv: torch.Tensor of shape (minibatch_size, components, output_symbols, input_symbols)
 
         """
         # The unsqueeze() calls are required to maintain dimensions that comform
@@ -272,10 +278,10 @@ class MultivariateHead(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels,
-        output_channels=None,
-        feature_dimension=DEFAULT_MIXTURE_FEATURES,
-        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
+        input_channels: int,
+        output_channels: Union[int, None],
+        feature_dimension: int,
+        mixture_components: int,
     ):
         super().__init__()
 
@@ -298,14 +304,14 @@ class MultivariateHead(torch.nn.Module):
             (output_channels, input_channels),
         )
 
-    def forward(self, latents):
+    def forward(self, latents: torch.Tensor):
         """
         Argument:
-           latents: (minibatch_size, feature_dimension)
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
         Returns:
-           log_p: (minibatch_size, components)
-           mu: (minibatch_size, components, output_symbols)
-           sigma_inv: (minibatch_size, components, output_symbols, input_symbols)
+           log_p: torch.Tensor of shape (minibatch_size, components)
+           mu: torch.Tensor fo shape (minibatch_size, components, output_symbols)
+           sigma_inv: torch.Tensor fo shape (minibatch_size, components, output_symbols, input_symbols)
 
         """
         log_p = logsoftmax(self.p_head(latents))
@@ -334,23 +340,25 @@ class MixtureModel(torch.nn.Module):
     """ """
 
     @property
-    def window_size(self):
+    def window_size(self) -> int:
         return self.time_series_features.window_size
 
     def __init__(
         self,
-        window_size,
-        input_channels,
-        output_channels=None,
-        output_head_type=UnivariateHead,
-        mixture_components=DEFAULT_MIXTURE_COMPONENTS,
-        feature_dimension=DEFAULT_MIXTURE_FEATURES,
-        exogenous_dimension=0,
-        extra_mixing_layers=0,
-        gaussian_noise=DEFAULT_GAUSSIAN_NOISE,
-        activation=relu,
-        dropout=DEFAULT_DROPOUT_P,
-        use_batch_norm=True,
+        window_size: int,
+        input_channels: int,
+        output_channels: Union[int, None] = None,
+        output_head_factory: Callable[
+            [int, Union[int, None], int, int], torch.nn.Module
+        ] = UnivariateHead,
+        mixture_components: int = DEFAULT_MIXTURE_COMPONENTS,
+        feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
+        exogenous_dimension: int = 0,
+        extra_mixing_layers: int = 0,
+        gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
+        activation: torch.nn.Module = relu,
+        dropout: float = DEFAULT_DROPOUT_P,
+        use_batch_norm: bool = True,
     ):
         super().__init__()
 
@@ -366,20 +374,24 @@ class MixtureModel(torch.nn.Module):
             use_batch_norm=use_batch_norm,
         )
 
-        self.head = output_head_type(
+        self.head = output_head_factory(
             input_channels,
-            output_channels=output_channels,
-            feature_dimension=feature_dimension,
-            mixture_components=mixture_components,
+            output_channels,
+            feature_dimension,
+            mixture_components,
         )
 
-    def forward_unpacked(self, window, exogenous=None):
+    def forward_unpacked(
+        self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
+    ):
         """
         Argument:
-           windowt: (minibatch_size, channels, window_size)
+           windowt: torch.Tensor of shape (minibatch_size, channels,
+           window_size)
+           exogenous: torch.Tensor to be mixed in or None
         Returns:
-           log_p_raw: (minibatch_size, components)
-           mu: (minibatch_size, components, channels)
+           log_p_raw: torch.Tensor of shape (minibatch_size, components)
+           mu: torch.Tensor of shape (minibatch_size, components, channels)
            sigma_inv: (minibatch_size, components, channels, channels)
         Notes:
            log_p_raw is "raw" in the sense in that the caller must apply a
@@ -397,7 +409,10 @@ class MixtureModel(torch.nn.Module):
 
         return log_p, mu, sigma_inv, latents
 
-    def forward(self, predictors):
+    def forward(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+    ):
         """This is a wrapper for the forward_unpacked() method.  It assumes that
         data is a tuple of (time_series, embedding).  In the case that data is
         not a tuple, it is assumed to be the time_series portion.
@@ -455,7 +470,9 @@ class ModelWithEmbedding(torch.nn.Module):
         self.model = model
         self.embedding = embedding
 
-    def forward(self, predictors_plus_encoding) -> Any:
+    def forward(
+        self, predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor]
+    ) -> Any:
         """
         Arguments:
             predictors: Tuple[torch.Tensor, torch.Tensor] - The first position

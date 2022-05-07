@@ -25,7 +25,7 @@ def is_sorted(l: Iterable) -> bool:
     return all([x <= y for x, y in zip(l, l[1:])])
 
 
-def rename_column(c):
+def rename_column(c: str):
     """
     Standardize column naming.  No spaces and no caps.
     """
