@@ -3,7 +3,7 @@ import datetime as dt
 import logging
 
 import os
-from typing import Callable, Dict, Iterable, Iterator, Tuple
+from typing import Callable, Dict, Iterable, Iterator, Union, Tuple
 
 # Common packages
 import click
@@ -150,7 +150,9 @@ def load_existing_model(existing_model, symbols):
 
 
 def prepare_data(
-    history_loader: Callable[..., Iterator[Tuple[str, pd.DataFrame]]],
+    history_loader: Callable[
+        [Union[str, Iterable[str]]], Iterator[Tuple[str, pd.DataFrame]]
+    ],
     symbol_list: Iterable[str],
     encoding: Dict[str, int],
     window_size: int,
@@ -440,6 +442,7 @@ def run(
         early_termination=early_termination,
         validation_batch_callback=validation_batch_callback,
         epoch_callback=epoch_callback,
+        loss_improvement_callback=loss_improvement_callback,
     )
     logging.info(
         f"Training terminated. Best epoch: {best_epoch}; Best validation loss: {best_validation_loss}"
