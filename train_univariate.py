@@ -432,7 +432,7 @@ def run(
         model_root, only_embeddings, model, encoding, symbols
     )
 
-    best_validation_loss, best_epoch = training.train(
+    best_epoch, best_validation_loss, best_model = training.train(
         model=model,
         loss_function=loss_function,
         optim=optim,
@@ -447,7 +447,7 @@ def run(
     logging.info(
         f"Training terminated. Best epoch: {best_epoch}; Best validation loss: {best_validation_loss}"
     )
-    return best_validation_loss
+    return best_epoch, best_validation_loss, best_model
 
 
 @click.command()

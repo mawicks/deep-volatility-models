@@ -1,5 +1,6 @@
 """This is a generic PyTorch training loop that can be adapted for different problems."""
 
+from copy import deepcopy
 from itertools import count
 from typing import Callable, Union
 
@@ -83,6 +84,7 @@ def train(
     epoch_callback: Callable[[int, float, float], None] = default_epoch_callback,
 ):
     # Initialize state for early termination monitoring
+    best_model = deepcopy(model)
     best_validation_loss = float("inf")
     best_epoch = -1
 
@@ -129,6 +131,7 @@ def train(
         if epoch_validation_loss < best_validation_loss:
             best_validation_loss = epoch_validation_loss
             best_epoch = epoch
+            best_model = deepcopy(model)
             flag = "**"
 
             loss_improvement_callback(epoch, epoch_validation_loss)
@@ -144,4 +147,4 @@ def train(
             )
             break  # Terminate early
 
-    return best_validation_loss, best_epoch
+    return best_epoch, best_validation_loss, best_model
