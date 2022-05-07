@@ -3,7 +3,7 @@ import abc
 import io
 import logging
 import os
-from typing import Any, Callable, Dict, Iterable, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, Iterable, Tuple, Union
 
 # Third party libraries
 import pandas as pd
@@ -155,6 +155,7 @@ def CachingDownloader(
     data_source: data_sources.DataSource,
     data_store: DataStore,
     writer_factory: WriterFactory,
+    overwrite_existing: bool = False,
 ):
     """
     Construct and return a download function that will download and write the
@@ -172,7 +173,6 @@ def CachingDownloader(
 
     def download(
         symbols: Union[Iterable[str], str],
-        overwrite_existing: bool = False,
     ) -> Dict[str, pd.DataFrame]:
         """
         Arguments:
@@ -254,6 +254,7 @@ def CachingLoader(
     data_store: DataStore,
     reader_factory: ReaderFactory,
     writer_factory: WriterFactory,
+    overwrite_existing: bool,
 ):
     """
     Construct a caching downloader frmo a data source, data store, reader
@@ -268,12 +269,14 @@ def CachingLoader(
 
     See the sample code below for an example of these are glued together.
     """
-    caching_download = CachingDownloader(data_source, data_store, writer_factory)
+    caching_download = CachingDownloader(
+        data_source, data_store, writer_factory, overwrite_existing=overwrite_existing
+    )
 
-    def load(symbols: Union[Iterable[str], str], overwrite_existing=False) -> Any:
+    def load(symbols: Union[Iterable[str], str]) -> Iterator[Tuple[str, Any]]:
         """ """
         symbols = util.to_symbol_list(symbols)
-        caching_download(symbols, overwrite_existing)
+        caching_download(symbols)
 
         reader = reader_factory()
         for symbol in symbols:
@@ -286,6 +289,7 @@ def CachingLoader(
 def CachingSymbolHistoryLoader(
     data_source: data_sources.DataSource,
     data_store: DataStore,
+    overwrite_existing: bool,
 ):
     """
     This loader factory returns an instance of a loader that handles the typical
@@ -294,17 +298,23 @@ def CachingSymbolHistoryLoader(
     knows how to read and write symbol histories as DataFrames.
     """
     return CachingLoader(
-        data_source, data_store, SymbolHistoryReader, SymbolHistoryWriter
+        data_source,
+        data_store,
+        SymbolHistoryReader,
+        SymbolHistoryWriter,
+        overwrite_existing=overwrite_existing,
     )
 
 
 if __name__ == "__main__":  # pragma: no cover
     data_store = FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
-    loader = CachingSymbolHistoryLoader(data_source, data_store)
+    loader = CachingSymbolHistoryLoader(
+        data_source, data_store, overwrite_existing=False
+    )
     combiner = PriceHistoryConcatenator()
     symbols = ("QQQ", "SPY", "BND", "EDV")
-    df = combiner(loader(symbols, overwrite_existing=False))
+    df = combiner(loader(symbols))
 
     selection = df.loc[:, (symbols, "log_return")]  # type: ignore
     print(selection)

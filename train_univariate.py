@@ -3,11 +3,12 @@ import datetime as dt
 import logging
 
 import os
-from typing import Dict, Iterable
+from typing import Callable, Dict, Iterable, Iterator, Tuple
 
 # Common packages
 import click
 import numpy as np
+import pandas as pd
 
 import torch
 import torch.utils.data
@@ -149,19 +150,15 @@ def load_existing_model(existing_model, symbols):
 
 
 def prepare_data(
+    history_loader: Callable[..., Iterator[Tuple[str, pd.DataFrame]]],
     symbol_list: Iterable[str],
     encoding: Dict[str, int],
     window_size: int,
-    refresh: bool = False,
     minibatch_size: int = OPT_MINIBATCH_SIZE,
 ):
     # Refresh historical data
     logging.info("Reading historical data")
     splits_by_symbol = {}
-
-    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
-    data_source = data_sources.YFinanceSource()
-    history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
 
     # For the purposes of hyperparameter optimization, make sure that
     # changing the window size doesn't change the number of rows.  In
@@ -184,7 +181,7 @@ def prepare_data(
         # but here we just load the single symbol of interest.  Since we expect
         # just one dataframe, grab it with next() instead of using a combiner()
         # (see stock-data.py).)
-        symbol_history = next(history_loader(s, overwrite_existing=refresh))[1]
+        symbol_history = next(history_loader(s))[1]
 
         # Symbol history is a combined history for all symbols.  We process it
         # one symbols at a time, so get the log returns for the current symbol
@@ -264,15 +261,12 @@ def log_mean_error(output, target):
 
 def make_validation_batch_logger():
     def log_epoch(epoch, batch, output, target, loss):
-        if output:
-            log_p, mu, inv_sigma = output[:3]
-            logging.info(
-                f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}"
-            )
-            logging.info(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
-            logging.info(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
+        log_p, mu, inv_sigma = output[:3]
+        logging.info(f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}")
+        logging.info(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
+        logging.info(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
 
-            log_mean_error(output, target)
+        log_mean_error(output, target)
 
     return log_epoch
 
@@ -337,12 +331,11 @@ def run(
     beta1=BETA1,
     beta2=BETA2,
 ):
-    logging.debug(f"model_root: {model_root}")
-    logging.debug(f"device: {device}")
-
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
 
+    logging.debug(f"model_root: {model_root}")
+    logging.debug(f"device: {device}")
     logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
@@ -358,14 +351,7 @@ def run(
     logging.info(f"use_batch_norm: {use_batch_norm}")
     logging.info(f"ADAM beta1: {beta1}")
     logging.info(f"ADAM beta2: {beta2}")
-
     logging.info(f"Seed: {SEED}")
-    torch.random.manual_seed(SEED)
-
-    # Do split first so that any subsequent random number generator
-    # calls won't affect the split.  We want the splits to be the same
-    # for different architecutre parameters to provide fair
-    # comparisons of different architectures on the same split.
 
     model_network = embeddings = None
     if existing_model:
@@ -378,8 +364,26 @@ def run(
 
     logging.info(f"Encoding: {encoding}")
 
+    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
+    data_source = data_sources.YFinanceSource()
+    history_loader = stock_data.CachingSymbolHistoryLoader(
+        data_source, data_store, refresh
+    )
+
+    torch.random.manual_seed(SEED)
+
+    # Do split before any random weight initialization so that any
+    # subsequent random number generator calls won't affect the split.
+    # We want the splits to be the same for different architecutre
+    # parameters to provide fair comparisons of different
+    # architectures on the same split.
+
     train_loader, validation_loader = prepare_data(
-        symbols, encoding, window_size, refresh, minibatch_size=minibatch_size
+        history_loader,
+        symbols,
+        encoding,
+        window_size,
+        minibatch_size=minibatch_size,
     )
 
     if model_network is None or embeddings is None:
@@ -400,41 +404,40 @@ def run(
     parameters = list(embeddings.parameters())
 
     # Add rest of model parameters unless we're training only the embeddings.
-    if only_embeddings:
-        model_network.eval()
-    else:
-        model_network.train()
+    if not only_embeddings:
         parameters.extend(model_network.parameters())
 
     logging.debug(f"parameters: {parameters}")
 
-    the_model = architecture.ModelWithEmbedding(model_network, embeddings)
-    the_model.to(device)
+    # Define model, optimizer, loss function, and callbacks before calling train()
+    model = architecture.ModelWithEmbedding(model_network, embeddings)
+    model.to(device)
 
     optim = torch.optim.Adam(
         parameters,
         lr=learning_rate,
-        eps=ADAM_EPSILON,
         betas=(beta1, beta2),
         weight_decay=weight_decay,
+        eps=ADAM_EPSILON,
     )
 
     loss_function = make_loss_function()
     validation_batch_callback = make_validation_batch_logger()
     epoch_callback = make_epoch_callback(
-        model_root, only_embeddings, the_model, encoding, symbols
+        model_root, only_embeddings, model, encoding, symbols
     )
     loss_improvement_callback = make_loss_improvement_callback(
-        model_root, only_embeddings, the_model, encoding, symbols
+        model_root, only_embeddings, model, encoding, symbols
     )
 
     best_validation_loss, best_epoch = training.train(
-        model=the_model,
+        model=model,
         loss_function=loss_function,
         optim=optim,
         train_loader=train_loader,
         validation_loader=validation_loader,
         max_epochs=max_epochs,
+        early_termination=early_termination,
         validation_batch_callback=validation_batch_callback,
         epoch_callback=epoch_callback,
     )
