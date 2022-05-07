@@ -54,11 +54,10 @@ def objective(trial):
     logging.info(f"minibatch_size: {minibatch_size}")
 
     loss = train_univariate.run(
-        model_file=None,
-        symbol=SYMBOLS,
+        existing_model=None,
+        symbols=SYMBOLS,
         refresh=False,
-        tune_embeddings=False,
-        just_embeddings=False,
+        only_embeddings=False,
         window_size=window_size,
         mixture_components=mixture_components,
         feature_dimension=feature_dimension,
@@ -77,8 +76,7 @@ def objective(trial):
     return loss
 
 
-study = optuna.create_study()
-
-study.optimize(objective, n_trials=400)
-
-logging.info(f"{study.best_params}")
+if __name__ == "__main__":
+    study = optuna.create_study()
+    study.optimize(objective, n_trials=400)
+    logging.info(f"{study.best_params}")
