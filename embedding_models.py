@@ -36,18 +36,18 @@ def SingleSymbolModelFactory(
             "wrapped_model must have `network` field with `model` of type `Module`"
         )
 
-    if isinstance(wrapped_model.network.embeddings, torch.nn.Module):
-        embeddings = wrapped_model.network.embeddings
+    if isinstance(wrapped_model.network.embedding, torch.nn.Module):
+        embeddings = wrapped_model.network.embedding
     else:
         raise ValueError(
             "wrapped_model must have `network` field with `embeddings` of type `Module`"
         )
 
     def single_symbol_model(symbol: str) -> model_wrappers.StockModel:
-        this_embedding = embeddings(torch.tensor(encoding[symbol])).detach()
+        single_embedding = embeddings(torch.tensor(encoding[symbol])).detach()
         return model_wrappers.StockModel(
             symbols=(symbol.upper(),),
-            network=SingleSymbolModelFromEmbedding(model, this_embedding),
+            network=SingleSymbolModelFromEmbedding(model, single_embedding),
             date=wrapped_model.date,
             epochs=wrapped_model.epochs,
             loss=wrapped_model.loss,
