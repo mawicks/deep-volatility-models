@@ -65,8 +65,10 @@ def do_one_symbol(
 
     data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "current_data"))
     data_source = data_sources.YFinanceSource()
-    history_loader = stock_data.CachingSymbolHistoryLoader(data_source, data_store)
-    symbol_history = next(history_loader(symbol, overwrite_existing=refresh))[1]
+    history_loader = stock_data.CachingSymbolHistoryLoader(
+        data_source, data_store, overwrite_existing=True
+    )
+    symbol_history = next(history_loader(symbol))[1]
     windowed_returns = time_series_datasets.RollingWindow(
         symbol_history.log_return,
         window_size,
