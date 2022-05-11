@@ -199,7 +199,9 @@ def prepare_data(
             windowed_returns, 1
         )
         symbol_dataset_with_encoding = (
-            time_series_datasets.ContextWindowEncodingAndTarget(i, symbol_dataset)
+            time_series_datasets.ContextWindowEncodingAndTarget(
+                i, symbol_dataset, device=device
+            )
         )
 
         train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))

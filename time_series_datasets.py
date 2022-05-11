@@ -234,14 +234,23 @@ class ContextWindowEncodingAndTarget(torch.utils.data.Dataset):
     torch.utils.data.ConcatDataset()"""
 
     def __init__(
-        self, symbol_encoding: int, symbol_history_dataset: ContextWindowAndTarget
+        self,
+        symbol_encoding: int,
+        symbol_history_dataset: ContextWindowAndTarget,
+        device=None,
     ):
-        self.__symbol_encoding = symbol_encoding
+        self.__symbol_encoding = torch.tensor(symbol_encoding)
+        if device is not None:
+            self.__symbol_encoding = self.__symbol_encoding.to(device)
         self.__symbol_history_dataset = symbol_history_dataset
+        self.__device = device
 
     def __len__(self) -> int:
         return len(self.__symbol_history_dataset)
 
     def __getitem__(self, i) -> Tuple[Tuple[torch.Tensor, int], torch.Tensor]:
         window, target = self.__symbol_history_dataset[i]
+        if self.__device is not None:
+            window = window.to(self.__device)
+            target = target.to(self.__device)
         return (window, self.__symbol_encoding), target
