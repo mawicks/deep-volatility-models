@@ -53,7 +53,6 @@ ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
 ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
-MODEL_ROOT = os.path.join(ROOT_PATH, "models")
 
 if torch.cuda.is_available():
     dev = "cuda:0"
@@ -275,9 +274,7 @@ def make_validation_batch_logger():
     return log_epoch
 
 
-def make_save_model(model_root, only_embeddings, model, encoding, symbols):
-    os.makedirs(model_root, exist_ok=True)
-
+def make_save_model(model_file, only_embeddings, model, encoding, symbols):
     def save_model(epoch, epoch_loss, prefix=""):
         wrapped_model = model_wrappers.StockModel(
             symbols=symbols,
@@ -288,15 +285,15 @@ def make_save_model(model_root, only_embeddings, model, encoding, symbols):
             loss=epoch_loss,
         )
 
-        torch.save(wrapped_model, os.path.join(model_root, f"{prefix}model.pt"))
+        torch.save(wrapped_model, f"{model_file}")
 
     return save_model
 
 
 def make_loss_improvement_callback(
-    model_root, only_embeddings, model, encoding, symbols
+    model_file, only_embeddings, model, encoding, symbols
 ):
-    save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
+    save_model = make_save_model(model_file, only_embeddings, model, encoding, symbols)
 
     def model_improvement_callback(epoch, epoch_loss):
         save_model(epoch, epoch_loss)
@@ -304,17 +301,15 @@ def make_loss_improvement_callback(
     return model_improvement_callback
 
 
-def make_epoch_callback(model_root, only_embeddings, model, encoding, symbols):
-    save_model = make_save_model(model_root, only_embeddings, model, encoding, symbols)
-
+def make_epoch_callback(model):
     def epoch_callback(epoch, train_loss, validation_loss):
         logging.debug(f"parameters: {(list(model.embedding.parameters()))}")
-        save_model(epoch, validation_loss, prefix="last_")
 
     return epoch_callback
 
 
 def run(
+    model_file,
     existing_model,
     symbols,
     refresh,
@@ -331,15 +326,14 @@ def run(
     use_batch_norm=USE_BATCH_NORM,
     max_epochs=EPOCHS,
     early_termination=EARLY_TERMINATION,
-    model_root=MODEL_ROOT,
     beta1=BETA1,
     beta2=BETA2,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
 
-    logging.debug(f"model_root: {model_root}")
-    logging.debug(f"device: {device}")
+    logging.info(f"model: {model_file}")
+    logging.info(f"device: {device}")
     logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
@@ -427,11 +421,9 @@ def run(
 
     loss_function = make_loss_function()
     validation_batch_callback = make_validation_batch_logger()
-    epoch_callback = make_epoch_callback(
-        model_root, only_embeddings, model, encoding, symbols
-    )
+    epoch_callback = make_epoch_callback(model)
     loss_improvement_callback = make_loss_improvement_callback(
-        model_root, only_embeddings, model, encoding, symbols
+        model_file, only_embeddings, model, encoding, symbols
     )
 
     best_epoch, best_validation_loss, best_model = training.train(
@@ -453,6 +445,12 @@ def run(
 
 
 @click.command()
+@click.option(
+    "--model",
+    default="model.pt",
+    show_default=True,
+    help="Trained model output file.",
+)
 @click.option(
     "--existing_model",
     default=None,
@@ -498,8 +496,8 @@ def run(
     "--gaussian_noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
 )
 @click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
-@click.option("--model_root", default=MODEL_ROOT, show_default=True)
 def main_cli(
+    model,
     existing_model,
     symbol,
     refresh,
@@ -513,9 +511,9 @@ def main_cli(
     minibatch_size,
     gaussian_noise,
     weight_decay,
-    model_root,
 ):
     run(
+        model_file=model,
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
@@ -529,7 +527,6 @@ def main_cli(
         minibatch_size=minibatch_size,
         gaussian_noise=gaussian_noise,
         weight_decay=weight_decay,
-        model_root=model_root,
     )
 
 
