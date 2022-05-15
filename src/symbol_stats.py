@@ -27,8 +27,7 @@ import stats_utils
 
 pd.set_option("display.width", None)
 pd.set_option("display.max_columns", None)
-pd.set_option("display.max_rows", 50000)
-pd.set_option("display.min_rows", 1000)
+pd.set_option("display.min_rows", 20)
 
 # Configure external packages and run()
 logging.basicConfig(format="%(levelname)s:%(message)s", level=logging.INFO, force=True)
@@ -107,10 +106,10 @@ def do_one_symbol(
 
         df = pd.DataFrame(
             {
-                "volatility": volatility,
-                "mean": mean,
+                "pred_volatility": volatility,
+                "pred_return": mean,
                 "p_non_base": 1.0 - torch.max(p, dim=1)[0],
-                "sigma": std_dev,
+                "pred_sigma": std_dev,
                 "base_sigma": dominant_component_sigma,
             },
             index=dates,
@@ -125,16 +124,16 @@ def do_one_symbol(
 
         df = df[
             [
-                "volatility",
+                "pred_volatility",
                 "log_return",
                 "close",
-                "mean",
+                "pred_return",
                 "p_non_base",
-                "sigma",
+                "pred_sigma",
                 "base_sigma",
             ]
         ]
-        logging.info(df[["log_return", "mean"]])
+        logging.info(df[["log_return", "pred_return", "pred_volatility"]])
 
         df.plot(subplots=True)
         plt.show()
@@ -142,9 +141,9 @@ def do_one_symbol(
 
 @click.command()
 @click.option(
-    "--model_dir",
+    "--model",
     show_default=True,
-    help="Use specified model directory.",
+    help="Model file to use.",
 )
 @click.option(
     "--symbol",
@@ -153,13 +152,13 @@ def do_one_symbol(
     help="Load model for this symbol.",
 )
 def run(
-    model_dir,
+    model,
     symbol,
 ):
-    logging.info(f"model_dir: {model_dir}")
+    logging.info(f"model: {model}")
     logging.info(f"symbol: {symbol}")
 
-    wrapped_model = torch.load(os.path.join(model_dir, "model.pt"))
+    wrapped_model = torch.load(model)
     single_symbol_model_factory = embedding_models.SingleSymbolModelFactory(
         wrapped_model.encoding, wrapped_model
     )

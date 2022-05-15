@@ -26,7 +26,7 @@ import training
 logging.basicConfig(level=logging.INFO, force=True)
 
 TRAIN_FRACTION = 0.80
-SEED = 24  # Previously 42
+DEFAULT_SEED = 24  # Previously 42
 
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
@@ -328,6 +328,7 @@ def run(
     early_termination=EARLY_TERMINATION,
     beta1=BETA1,
     beta2=BETA2,
+    seed=DEFAULT_SEED,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -349,7 +350,7 @@ def run(
     logging.info(f"use_batch_norm: {use_batch_norm}")
     logging.info(f"ADAM beta1: {beta1}")
     logging.info(f"ADAM beta2: {beta2}")
-    logging.info(f"Seed: {SEED}")
+    logging.info(f"Seed: {seed}")
 
     model_network = embeddings = None
     if existing_model:
@@ -368,7 +369,7 @@ def run(
         data_source, data_store, refresh
     )
 
-    torch.random.manual_seed(SEED)
+    torch.random.manual_seed(seed)
 
     # Do split before any random weight initialization so that any
     # subsequent random number generator calls won't affect the split.
@@ -496,6 +497,7 @@ def run(
     "--gaussian_noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
 )
 @click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
+@click.option("--seed", default=DEFAULT_SEED, show_default=True, type=int)
 def main_cli(
     model,
     existing_model,
@@ -511,6 +513,7 @@ def main_cli(
     minibatch_size,
     gaussian_noise,
     weight_decay,
+    seed,
 ):
     run(
         model_file=model,
@@ -527,6 +530,7 @@ def main_cli(
         minibatch_size=minibatch_size,
         gaussian_noise=gaussian_noise,
         weight_decay=weight_decay,
+        seed=seed,
     )
 
 
