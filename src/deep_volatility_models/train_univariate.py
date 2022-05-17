@@ -52,8 +52,6 @@ USE_BATCH_NORM = True
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
-ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
-
 if torch.cuda.is_available():
     dev = "cuda:0"
 else:
@@ -363,7 +361,7 @@ def run(
 
     logging.info(f"Encoding: {encoding}")
 
-    data_store = stock_data.FileSystemStore(os.path.join(ROOT_PATH, "training_data"))
+    data_store = stock_data.FileSystemStore("training_data")
     data_source = data_sources.YFinanceSource()
     history_loader = stock_data.CachingSymbolHistoryLoader(
         data_source, data_store, refresh

@@ -5,4 +5,4 @@ for symbol in $SYMBOLS
 do
     args="$args --symbol $symbol"
 done
-python ./train_univariate.py $* $args
+python -m deep_volatility_models.train_univariate $* $args
