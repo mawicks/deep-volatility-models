@@ -4,7 +4,7 @@ from typing import Callable, Dict
 import torch
 
 # Local packages
-import model_wrappers
+import deep_volatility_models.model_wrappers as model_wrappers
 
 
 class SingleSymbolModelFromEmbedding(torch.nn.Module):

@@ -1,8 +1,9 @@
 import pytest
 import torch
-import mixture_model_stats
 import math
 import numpy as np
+
+import deep_volatility_models.mixture_model_stats as mixture_model_stats
 
 BATCH_SIZE = 16
 

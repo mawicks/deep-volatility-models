@@ -2,7 +2,7 @@ import pytest
 
 import torch
 
-import architecture
+import deep_volatility_models.architecture as architecture
 
 
 BATCH_SIZE = 5

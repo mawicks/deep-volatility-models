@@ -18,11 +18,11 @@ import torch
 # from IPython.display import display,HTML
 
 # Local imports
-import data_sources
-import embedding_models
-import stock_data
-import time_series_datasets
-import stats_utils
+import deep_volatility_models.data_sources as data_sources
+import deep_volatility_models.embedding_models as embedding_models
+import deep_volatility_models.stock_data as stock_data
+import deep_volatility_models.time_series_datasets as time_series_datasets
+import deep_volatility_models.stats_utils as stats_utils
 
 
 pd.set_option("display.width", None)

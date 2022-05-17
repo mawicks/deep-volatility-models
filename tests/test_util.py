@@ -1,7 +1,7 @@
 import pytest
 
 # Local modules
-import util
+import deep_volatility_models.util as util
 
 
 @pytest.mark.parametrize(

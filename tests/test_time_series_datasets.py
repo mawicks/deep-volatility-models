@@ -4,7 +4,7 @@ import pytest
 import torch
 
 # Local modules
-import time_series_datasets
+import deep_volatility_models.time_series_datasets as time_series_datasets
 
 
 # Constants used in tests.

@@ -2,7 +2,7 @@ import logging
 
 import optuna
 
-import train_univariate
+import deep_volatility_models.train_univariate as train_univariate
 
 logging.basicConfig(level=logging.INFO)
 
