@@ -249,7 +249,7 @@ def make_loss_function():
     return loss_function
 
 
-def log_mean_error(output, target):
+def log_mean_error(epoch, output, target):
     log_p, mu = output[:2]
     mb_size, components, channels = mu.shape
     combined_mu = torch.sum(
@@ -257,17 +257,17 @@ def log_mean_error(output, target):
         dim=1,
     )
     mean_error = torch.mean(target.squeeze(2) - combined_mu, dim=0)
-    logging.info(f"mean_error: {mean_error}")
+    logging.debug(f"epoch: {epoch} mean_error: {float(mean_error):.5f}")
 
 
 def make_validation_batch_logger():
     def log_epoch(epoch, batch, output, target, loss):
         log_p, mu, inv_sigma = output[:3]
-        logging.info(f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}")
-        logging.info(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
-        logging.info(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
 
-        log_mean_error(output, target)
+        log_mean_error(epoch, output, target)
 
     return log_epoch
 

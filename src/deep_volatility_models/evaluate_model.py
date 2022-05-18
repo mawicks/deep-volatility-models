@@ -27,7 +27,7 @@ import deep_volatility_models.stats_utils as stats_utils
 
 pd.set_option("display.width", None)
 pd.set_option("display.max_columns", None)
-pd.set_option("display.min_rows", 20)
+pd.set_option("display.min_rows", 10)
 
 # Configure external packages and run()
 logging.basicConfig(format="%(levelname)s:%(message)s", level=logging.INFO, force=True)
@@ -133,10 +133,31 @@ def do_one_symbol(
                 "base_sigma",
             ]
         ]
-        logging.info(df[["log_return", "pred_return", "pred_volatility"]])
 
-        df.plot(subplots=True)
-        plt.show()
+        return_df = df[["log_return", "pred_return", "pred_volatility"]]
+        return return_df
+
+
+def run(model, symbol):
+    wrapped_model = torch.load(model)
+    single_symbol_model_factory = embedding_models.SingleSymbolModelFactory(
+        wrapped_model.encoding, wrapped_model
+    )
+
+    # symbols_to_process = list(set(symbol).difference(exclude_symbols))
+    symbols_to_process = sorted(list(set(symbol)))
+    logging.info(f"symbols_to_process: {symbols_to_process}")
+
+    dataframes = {}
+    for s in symbols_to_process:
+        df = do_one_symbol(s, single_symbol_model_factory(s.upper()), True)
+        dataframes[s] = df
+
+    combined_df = pd.concat(
+        dataframes.values(), keys=dataframes.keys(), axis=1
+    ).dropna()
+
+    return combined_df
 
 
 @click.command()
@@ -151,26 +172,20 @@ def do_one_symbol(
     show_default=True,
     help="Load model for this symbol.",
 )
-def run(
+def run_cli(
     model,
     symbol,
 ):
     logging.info(f"model: {model}")
     logging.info(f"symbol: {symbol}")
 
-    wrapped_model = torch.load(model)
-    single_symbol_model_factory = embedding_models.SingleSymbolModelFactory(
-        wrapped_model.encoding, wrapped_model
-    )
+    df = run(model, symbol)
 
-    # symbols_to_process = list(set(symbol).difference(exclude_symbols))
-    symbols_to_process = sorted(list(set(symbol)))
-    logging.info(f"symbols_to_process: {symbols_to_process}")
-
-    for s in symbols_to_process:
-        do_one_symbol(s, single_symbol_model_factory(s.upper()), True)
+    logging.info(df)
+    df.plot(subplots=True)
+    plt.show()
 
 
 if __name__ == "__main__":
     # Run everything
-    run()
+    run_cli()
