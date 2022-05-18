@@ -31,8 +31,8 @@ def batch_norm_factory_1d(
     """Generate a batchnorm layer or generate a null layer as appropriate"""
     if use_batch_norm:
         return torch.nn.BatchNorm1d(feature_dimension, eps=BATCH_NORM_EPS)
-    else:
-        return torch.nn.Sequential()
+
+    return torch.nn.Sequential()
 
 
 class MinMaxClamping(torch.nn.Module):
@@ -251,13 +251,14 @@ class UnivariateHead(torch.nn.Module):
         self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)
 
     def forward(self, latents: torch.Tensor):
-        """
-        Argument:
+        """Argument:
            latents: torch.Tensor of shape (minibatch_size, feature_dimension)
         Returns:
            log_p: torch.Tensor of shape (minibatch_size, components)
            mu: torch.Tensor of shape (minibatch_size, components, output_symbols)
-           sigma_inv: torch.Tensor of shape (minibatch_size, components, output_symbols, input_symbols)
+
+           sigma_inv: torch.Tensor of shape (minibatch_size,
+               components, output_symbols, input_symbols)
 
         """
         # The unsqueeze() calls are required to maintain dimensions that comform
@@ -305,13 +306,14 @@ class MultivariateHead(torch.nn.Module):
         )
 
     def forward(self, latents: torch.Tensor):
-        """
-        Argument:
+        """Argument:
            latents: torch.Tensor of shape (minibatch_size, feature_dimension)
         Returns:
            log_p: torch.Tensor of shape (minibatch_size, components)
            mu: torch.Tensor fo shape (minibatch_size, components, output_symbols)
-           sigma_inv: torch.Tensor fo shape (minibatch_size, components, output_symbols, input_symbols)
+
+           sigma_inv: torch.Tensor fo shape (minibatch_size,
+               components, output_symbols, input_symbols)
 
         """
         log_p = logsoftmax(self.p_head(latents))

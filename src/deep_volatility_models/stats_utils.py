@@ -14,17 +14,20 @@ def gcd(list_like):
 def combine_mixture_metrics(p, mu, sigma_inv):
     """
     Inputs:
-        p (tensor(mb_size, mixture_componente)):
-           probability of each component
-        mu (tensor(mb_size, mixture_components, symbols): mu for each component
-        sigma_inv (tensor(mb_size, mixture_components, symbols, symbols): sigma for each component
+        p: torch.tensor of shape (mb_size, mixture_componente)) -
+            probability of each component
+        mu: torch.tensor of shape (mb_size, mixture_components, symbols) -
+            mu for each component
+        sigma_inv: torch.tensor of shape (tensor(mb_size, mixture_components, symbols, symbols) -
+            sigma for each component
 
     Outputs:
-        return (tensor(mb_size)): expected return
-        std_dev (tensor(mb_size, symbols, symbols)): std deviations (sqrt of covariance matrix)
+        return:  torch.tensor of shape (mb_size,) - expected return
+        std_dev: torch.tensor of shape (mb_size, symbols, symbols)) -
+            std deviations (sqrt of covariance matrix)
     """
 
-    mb_size, mixture_components, symbols = mu.shape
+    symbols = mu.shape[2]
     if symbols != 1:
         raise Exception(
             "FIXME:  This code currently requires number of symbols to be 1"

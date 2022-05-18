@@ -8,7 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 # Local modules
-import deep_volatility_models.util as util
+from deep_volatility_models import util
 
 logging.basicConfig(level=logging.INFO)
 
