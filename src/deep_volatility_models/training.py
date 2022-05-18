@@ -1,14 +1,16 @@
 """This is a generic PyTorch training loop that can be adapted for different problems."""
 
+# Standard Python packages
 from copy import deepcopy
 from itertools import count
+import logging
 from typing import Callable, Union
 
+
+# Third party packages
 import numpy as np
 import torch
 import torch.utils.data.dataloader
-
-import logging
 
 
 def default_batch_callback(
