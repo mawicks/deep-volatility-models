@@ -15,13 +15,13 @@ import torch.utils.data
 import torch.utils.data.dataloader
 
 # Local imports
-import deep_volatility_models.data_sources as data_sources
-import deep_volatility_models.stock_data as stock_data
-import deep_volatility_models.mixture_model_stats as mixture_model_stats
-import deep_volatility_models.time_series_datasets as time_series_datasets
-import deep_volatility_models.model_wrappers as model_wrappers
-import deep_volatility_models.architecture as architecture
-import deep_volatility_models.training as training
+from deep_volatility_models import data_sources
+from deep_volatility_models import stock_data
+from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import time_series_datasets
+from deep_volatility_models import model_wrappers
+from deep_volatility_models import architecture
+from deep_volatility_models import training
 
 logging.basicConfig(level=logging.INFO, force=True)
 
@@ -174,6 +174,7 @@ def prepare_data(
     skip = 256 - window_size
 
     for s in symbol_list:
+        logging.info(f"Reading {s}")
         i = encoding[s]
 
         # history_loader can load many symbols at once for multivariate
@@ -307,6 +308,7 @@ def make_epoch_callback(model):
 
 
 def run(
+    use_hsmd,
     model_file,
     existing_model,
     symbols,
@@ -362,7 +364,11 @@ def run(
     logging.info(f"Encoding: {encoding}")
 
     data_store = stock_data.FileSystemStore("training_data")
-    data_source = data_sources.YFinanceSource()
+    if use_hsmd:
+        data_source = data_sources.HugeStockMarketDatasetSource(use_hsmd)
+    else:
+        data_source = data_sources.YFinanceSource()
+
     history_loader = stock_data.CachingSymbolHistoryLoader(
         data_source, data_store, refresh
     )
@@ -445,6 +451,12 @@ def run(
 
 @click.command()
 @click.option(
+    "--use_hsmd",
+    default=None,
+    show_default=True,
+    help="Use huge stock market dataset in specified zip file (else use yfinance)",
+)
+@click.option(
     "--model",
     default="model.pt",
     show_default=True,
@@ -497,6 +509,7 @@ def run(
 @click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
 @click.option("--seed", default=DEFAULT_SEED, show_default=True, type=int)
 def main_cli(
+    use_hsmd,
     model,
     existing_model,
     symbol,
@@ -514,6 +527,7 @@ def main_cli(
     seed,
 ):
     run(
+        use_hsmd,
         model_file=model,
         existing_model=existing_model,
         symbols=symbol,
