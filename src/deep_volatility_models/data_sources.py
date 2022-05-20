@@ -98,21 +98,23 @@ def HugeStockMarketDatasetSource(zip_filename) -> DataSource:
 
         with zipfile.ZipFile(zip_filename, "r") as open_zipfile:
             for symbol in symbols:
-                print(f"trying: {symbol}")
+                found = False
                 for prefix in ["Data/Stocks", "Data/ETFs"]:
                     try:
                         name = f"{prefix}/{symbol.lower()}.us.txt"
-                        print(f"trying name: {name}")
                         symbol_df = pd.read_csv(open_zipfile.open(name))
                         response[symbol] = (
                             _add_columns(symbol_df)
                             .dropna()
                             .applymap(lambda x: round(x, 6))
                         )
-
+                        found = True
                     except KeyError:
-                        print("missing")
                         pass
+                if not found:
+                    raise ValueError(
+                        f"Symbol {symbol} not found in Huge Stock Market Dataset"
+                    )
 
         return response
 
