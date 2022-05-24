@@ -18,11 +18,12 @@ import torch
 # from IPython.display import display,HTML
 
 # Local imports
-import deep_volatility_models.data_sources as data_sources
-import deep_volatility_models.embedding_models as embedding_models
-import deep_volatility_models.stock_data as stock_data
-import deep_volatility_models.time_series_datasets as time_series_datasets
-import deep_volatility_models.stats_utils as stats_utils
+from deep_volatility_models import data_sources
+from deep_volatility_models import embedding_models
+from deep_volatility_models import sample
+from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import stock_data
+from deep_volatility_models import time_series_datasets
 
 
 pd.set_option("display.width", None)
@@ -39,6 +40,36 @@ torch.set_printoptions(
 
 ANNUAL_TRADING_DAYS = 252.0
 ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
+
+TIME_SAMPLES = 64
+
+
+def simulate(model, symbol, window):
+    # is a single row with shape: (symbols, window_size).
+    # Add a batch dimension (we'll doing a single row, so the batch dimension is one):
+    window = window.unsqueeze(0)
+
+    logging.info(f"{symbol} window: {window.shape}")
+    logging.info(f"{symbol} window]: {window}")
+
+    simulated_returns = sample.multivariate_mixture_sample(model, window, TIME_SAMPLES)
+    logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
+
+    historic_returns = window.squeeze(1).squeeze(0).numpy()[1:]
+    simulated_returns = simulated_returns.squeeze(1).squeeze(0).numpy()
+    logging.info(f"mean return: {np.mean(simulated_returns)}")
+    simulated_returns = np.concatenate(
+        [[0.0], simulated_returns - np.mean(simulated_returns)]
+    )
+    sample_index = list(
+        range(
+            len(historic_returns) - 1,
+            len(historic_returns) + len(simulated_returns) - 1,
+        )
+    )
+    cum_historic_returns = np.cumsum(historic_returns)
+    plt.plot(cum_historic_returns)
+    plt.plot(sample_index, cum_historic_returns[-1] + np.cumsum(simulated_returns))
 
 
 def do_one_symbol(
@@ -67,6 +98,9 @@ def do_one_symbol(
     history_loader = stock_data.CachingSymbolHistoryLoader(
         data_source, data_store, overwrite_existing=True
     )
+    # The Cachingloader returns a sequence of (symbol, data).
+    # Since we pass just one symbol rather than a list, use
+    # next to grab the first (symbol, dataframe) pair, then [1] to grab the data.
     symbol_history = next(history_loader(symbol))[1]
     windowed_returns = time_series_datasets.RollingWindow(
         symbol_history.log_return,
@@ -75,6 +109,8 @@ def do_one_symbol(
     )
     logging.debug(f"{symbol} windowed_returns[0]: {windowed_returns[0].shape}")
     logging.debug(f"{symbol} windowed_returns[0]: {windowed_returns[0]}")
+
+    simulate(model.network, symbol, windowed_returns[-1])
 
     with torch.no_grad():
 
@@ -87,16 +123,19 @@ def do_one_symbol(
         log_p, mu, sigma_inv = model.network(windows)[:3]
         p = torch.exp(log_p)
 
-        logging.debug(f"p: {p}")
+        logging.info(f"p: {p}")
         logging.debug(f"mu: {mu}")
         logging.debug(f"sigma_inv: {sigma_inv}")
 
-        mean, std_dev = stats_utils.combine_mixture_metrics(p, mu, sigma_inv)
+        mean, variance = mixture_model_stats.univariate_combine_metrics(
+            p, mu, sigma_inv
+        )
         annual_return = ANNUAL_TRADING_DAYS * mean
-        volatility = np.sqrt(ANNUAL_TRADING_DAYS) * std_dev
+        daily_std_dev = np.sqrt(variance)
+        volatility = np.sqrt(ANNUAL_TRADING_DAYS) * daily_std_dev
 
         logging.debug(f"daily mean: {mean}")
-        logging.debug(f"daily std_dev: {std_dev}")
+        logging.debug(f"daily std_dev: {daily_std_dev}")
 
         logging.debug(f"annual return: {annual_return}")
         logging.debug(f"annual volatility: {volatility}")
@@ -109,7 +148,7 @@ def do_one_symbol(
                 "pred_volatility": volatility,
                 "pred_return": mean,
                 "p_non_base": 1.0 - torch.max(p, dim=1)[0],
-                "pred_sigma": std_dev,
+                "pred_sigma": daily_std_dev,
                 "base_sigma": dominant_component_sigma,
             },
             index=dates,
