@@ -163,7 +163,7 @@ def univariate_combine_metrics(p, mu, sigma_inv):
 
     Outputs:
         mu: tensor of shape (mb_size,) containing the expected mean
-        variance: tensor of shape (mb_size, 1, 1) containing the
+        variance: tensor of shape (mb_size,) containing the
             variance of the mixture.
 
         Note tha the return value is the standard deviation and *not* the inverse
@@ -193,7 +193,6 @@ def univariate_combine_metrics(p, mu, sigma_inv):
 
     variance = (1.0 / sigma_inv) ** 2
     composite_mean = torch.sum(p * mu, dim=1)
-    print(f"composite_mean: {composite_mean}")
 
     # TODO: Verify this is correct implementation of parallel axis theorem
     # E[(x-mu)**2] = sum p_i E[(x_i-mu)**2]
