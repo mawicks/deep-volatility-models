@@ -314,6 +314,8 @@ def run(
     symbols,
     refresh,
     only_embeddings,
+    max_epochs=EPOCHS,
+    early_termination=EARLY_TERMINATION,
     window_size=OPT_WINDOW_SIZE,
     mixture_components=OPT_MIXTURE_COMPONENTS,
     feature_dimension=OPT_FEATURE_DIMENSION,
@@ -324,8 +326,6 @@ def run(
     learning_rate=OPT_LEARNING_RATE,
     weight_decay=OPT_WEIGHT_DECAY,
     use_batch_norm=USE_BATCH_NORM,
-    max_epochs=EPOCHS,
-    early_termination=EARLY_TERMINATION,
     beta1=BETA1,
     beta2=BETA2,
     seed=DEFAULT_SEED,
@@ -454,7 +454,7 @@ def run(
     "--use_hsmd",
     default=None,
     show_default=True,
-    help="Use huge stock market dataset in specified zip file (else use yfinance)",
+    help="Use huge stock market dataset if specified zip file (else use yfinance)",
 )
 @click.option(
     "--model",
@@ -482,6 +482,12 @@ def run(
     default=False,
     show_default=True,
     help="Train only the embeddings",
+)
+@click.option(
+    "--early_termination",
+    default=EARLY_TERMINATION,
+    show_default=True,
+    help="Terminate if no improvement in this number of iterations",
 )
 @click.option(
     "--learning_rate", default=OPT_LEARNING_RATE, show_default=True, type=float
@@ -515,6 +521,7 @@ def main_cli(
     symbol,
     refresh,
     only_embeddings,
+    early_termination,
     learning_rate,
     dropout,
     feature_dimension,
@@ -533,6 +540,7 @@ def main_cli(
         symbols=symbol,
         refresh=refresh,
         only_embeddings=only_embeddings,
+        early_termination=early_termination,
         learning_rate=learning_rate,
         dropout=dropout,
         feature_dimension=feature_dimension,
