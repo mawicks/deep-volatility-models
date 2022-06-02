@@ -31,24 +31,36 @@ DEFAULT_SEED = 24  # Previously 42
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
-# Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
-OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
-OPT_DROPOUT = 0.130894  # Previously 0.50
-OPT_FEATURE_DIMENSION = 86  # Previously 40
-OPT_MIXTURE_COMPONENTS = 3  # Previously 4
-OPT_WINDOW_SIZE = 256  # Previously 64
-OPT_EMBEDDING_DIMENSION = 3  # Previously 10
-OPT_MINIBATCH_SIZE = 248  # Previously 75
-OPT_GAUSSIAN_NOISE = 0.000226  # Previously 0.0025
-OPT_WEIGHT_DECAY = 8.489603e-07  # Previously 5e-9
 
-
-# Following parameters haven't been optimized yet.
+RISK_NEUTRAL = True
+if RISK_NEUTRAL:
+    OPT_LEARNING_RATE = 0.000709
+    OPT_DROPOUT = 0.007088
+    OPT_FEATURE_DIMENSION = 87
+    OPT_MIXTURE_COMPONENTS = 6
+    OPT_WINDOW_SIZE = 256
+    OPT_EMBEDDING_DIMENSION = 5
+    OPT_MINIBATCH_SIZE = 70
+    OPT_GAUSSIAN_NOISE = 0.002677
+    OPT_WEIGHT_DECAY = 6.827285e-07
+    USE_BATCH_NORM = False
+else:
+    # Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
+    OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
+    OPT_DROPOUT = 0.130894  # Previously 0.50
+    OPT_FEATURE_DIMENSION = 86  # Previously 40
+    OPT_MIXTURE_COMPONENTS = 3  # Previously 4
+    OPT_WINDOW_SIZE = 256  # Previously 64
+    OPT_EMBEDDING_DIMENSION = 3  # Previously 10
+    OPT_MINIBATCH_SIZE = 248  # Previously 75
+    OPT_GAUSSIAN_NOISE = 0.000226  # Previously 0.0025
+    OPT_WEIGHT_DECAY = 8.489603e-07  # Previously 5e-9
+    # Value of USE_BATCH_NORM wasn't optimized with hyperopt but was set to True.
+    USE_BATCH_NORM = True
 
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8
-USE_BATCH_NORM = True
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
@@ -68,6 +80,7 @@ def create_new_model(
     gaussian_noise=OPT_GAUSSIAN_NOISE,
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
+    risk_neutral=RISK_NEUTRAL,
 ):
     default_network_class = architecture.MixtureModel
 
@@ -81,6 +94,7 @@ def create_new_model(
         dropout=dropout,
         use_batch_norm=use_batch_norm,
         activation=ACTIVATION,
+        risk_neutral=risk_neutral,
     )
     embedding = torch.nn.Embedding(embedding_size, embedding_dimension)
 
@@ -313,6 +327,7 @@ def run(
     existing_model,
     symbols,
     refresh,
+    risk_neutral,
     only_embeddings,
     max_epochs=EPOCHS,
     early_termination=EARLY_TERMINATION,
@@ -338,6 +353,7 @@ def run(
     logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
+    logging.info(f"risk_neutral: {risk_neutral}")
     logging.info(f"window_size: {window_size}")
     logging.info(f"mixture_components: {mixture_components}")
     logging.info(f"feature_dimension: {feature_dimension}")
@@ -399,6 +415,7 @@ def run(
             gaussian_noise=gaussian_noise,
             use_batch_norm=use_batch_norm,
             dropout=dropout,
+            risk_neutral=risk_neutral,
         )
         logging.info("Initialized new model")
 
@@ -477,6 +494,13 @@ def run(
     help="Refresh stock data",
 )
 @click.option(
+    "--risk_neutral",
+    is_flag=True,
+    default=RISK_NEUTRAL,
+    show_default=True,
+`    help="Use risk-neutral adjustment on predicted mean returns",
+)
+@click.option(
     "--only_embeddings",
     is_flag=True,
     default=False,
@@ -520,6 +544,7 @@ def main_cli(
     existing_model,
     symbol,
     refresh,
+    risk_neutral,
     only_embeddings,
     early_termination,
     learning_rate,
@@ -539,6 +564,7 @@ def main_cli(
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
+        risk_neutral=risk_neutral,
         only_embeddings=only_embeddings,
         early_termination=early_termination,
         learning_rate=learning_rate,

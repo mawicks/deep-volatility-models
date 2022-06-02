@@ -5,6 +5,9 @@ from typing import Any, Callable, Tuple, Union
 import torch
 import torch.nn
 
+# Local imports
+from deep_volatility_models import mixture_model_stats
+
 # Instances of various activation functions for convenience
 relu = torch.nn.ReLU()
 softplus = torch.nn.Softplus()
@@ -336,6 +339,16 @@ class MultivariateHead(torch.nn.Module):
         return log_p, mu, sigma_inv
 
 
+def adjust_mean(log_p, mu, sigma_inv):
+    p = torch.exp(log_p)
+    mu_c, var_c = mixture_model_stats.univariate_combine_metrics(p, mu, sigma_inv)
+    # log_mean_return is log of mean return as opposed to mean of log return.
+    log_mean_return = mu_c + 0.5 * var_c
+    log_mean_return = log_mean_return.unsqueeze(1).unsqueeze(2).expand(mu.shape)
+
+    return mu - log_mean_return
+
+
 class MixtureModel(torch.nn.Module):
     """ """
 
@@ -359,6 +372,7 @@ class MixtureModel(torch.nn.Module):
         activation: torch.nn.Module = relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
+        risk_neutral=True,
     ):
         super().__init__()
 
@@ -380,6 +394,8 @@ class MixtureModel(torch.nn.Module):
             feature_dimension,
             mixture_components,
         )
+
+        self.risk_neutral = risk_neutral
 
     def forward_unpacked(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -422,7 +438,12 @@ class MixtureModel(torch.nn.Module):
         if not isinstance(predictors, tuple):
             predictors = (predictors, None)
 
-        return self.forward_unpacked(*predictors)
+        log_p, mu, sigma_inv, latents = self.forward_unpacked(*predictors)
+
+        if hasattr(self, "risk_neutral") and self.risk_neutral:
+            mu = adjust_mean(log_p, mu, sigma_inv)
+
+        return log_p, mu, sigma_inv, latents
 
 
 class ModelWithEmbedding(torch.nn.Module):
