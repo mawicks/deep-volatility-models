@@ -34,16 +34,16 @@ EARLY_TERMINATION = 100  # Was 1000
 
 RISK_NEUTRAL = True
 if RISK_NEUTRAL:
-    OPT_LEARNING_RATE = 0.000709
-    OPT_DROPOUT = 0.007088
-    OPT_FEATURE_DIMENSION = 87
-    OPT_MIXTURE_COMPONENTS = 6
+    OPT_LEARNING_RATE = 0.000538
+    OPT_DROPOUT = 0.001099
+    OPT_FEATURE_DIMENSION = 41
+    OPT_MIXTURE_COMPONENTS = 4
     OPT_WINDOW_SIZE = 256
-    OPT_EMBEDDING_DIMENSION = 5
-    OPT_MINIBATCH_SIZE = 70
-    OPT_GAUSSIAN_NOISE = 0.002677
-    OPT_WEIGHT_DECAY = 6.827285e-07
-    USE_BATCH_NORM = False
+    OPT_EMBEDDING_DIMENSION = 4
+    OPT_MINIBATCH_SIZE = 124
+    OPT_GAUSSIAN_NOISE = 0.002174
+    OPT_WEIGHT_DECAY = 1.349159e-06
+    USE_BATCH_NORM = False  # risk neutral version has trouble with batch normalization
 else:
     # Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
     OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
@@ -498,7 +498,7 @@ def run(
     is_flag=True,
     default=RISK_NEUTRAL,
     show_default=True,
-`    help="Use risk-neutral adjustment on predicted mean returns",
+    help="Use risk-neutral adjustment on predicted mean returns",
 )
 @click.option(
     "--only_embeddings",
