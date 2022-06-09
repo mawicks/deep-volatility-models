@@ -237,7 +237,6 @@ class UnivariateHead(torch.nn.Module):
         input_channels: int,
         output_channels: Union[int, None],
         feature_dimension: int,
-        mixture_components: int,
     ):
         super().__init__()
 
@@ -247,6 +246,55 @@ class UnivariateHead(torch.nn.Module):
         if input_channels != 1 or output_channels != 1:
             raise ValueError(
                 "UnivariateHead requires input_channels == output_channels == 1"
+            )
+
+        # mu_head turns feature vector into a single mu estiamte.
+        self.mu_head = torch.nn.Linear(feature_dimension, 1)
+
+        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
+        self.sigma_inv_head = torch.nn.Linear(feature_dimension, 1)
+
+    def forward(self, latents: torch.Tensor):
+        """
+        Argument:
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
+        Returns:
+           mu: torch.Tensor of shape (minibatch_size, output_symbols=1)
+           sigma_inv: torch.Tensor of shape (minibatch_size, output_symbols=1, input_symbols=1)
+
+        """
+        mu = self.mu_head(latents)
+        sigma_inv = self.sigma_inv_head(latents)
+
+        # The unsqueeze() call is required to maintain dimensions that comform
+        # with the multivarate case.  In the multivate case, sigma_inv is a
+        # matrix (with row and colum dimensions equal to the number of symbols)
+
+        sigma_inv = sigma_inv.unsqueeze(2)
+
+        return mu, sigma_inv
+
+
+class UnivariateMixtureHead(torch.nn.Module):
+    """
+    TODO
+    """
+
+    def __init__(
+        self,
+        input_channels: int,
+        output_channels: Union[int, None],
+        feature_dimension: int,
+        mixture_components: int,
+    ):
+        super().__init__()
+
+        if output_channels is None:
+            output_channels = input_channels
+
+        if input_channels != 1 or output_channels != 1:
+            raise ValueError(
+                "UnivariateMixtureHead requires input_channels == output_channels == 1"
             )
 
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
@@ -274,7 +322,7 @@ class UnivariateHead(torch.nn.Module):
         return log_p, mu, sigma_inv
 
 
-class MultivariateHead(torch.nn.Module):
+class MultivariateMixtureHead(torch.nn.Module):
     """
     TODO
     """
@@ -363,7 +411,7 @@ class MixtureModel(torch.nn.Module):
         output_channels: Union[int, None] = None,
         output_head_factory: Callable[
             [int, Union[int, None], int, int], torch.nn.Module
-        ] = UnivariateHead,
+        ] = UnivariateMixtureHead,
         mixture_components: int = DEFAULT_MIXTURE_COMPONENTS,
         feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
         exogenous_dimension: int = 0,
