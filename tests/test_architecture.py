@@ -71,6 +71,7 @@ def is_lower_triangular(m):
                         assert m[mb_i, mx_i, i, col_offset + j] != 0.0
 
 
+# TODO - Add test cases for risk_neutral=True
 @pytest.mark.parametrize(
     "batch_size, window_size, input_symbols, output_symbols, feature_dim,"
     "mixture_components, exogenous_dim, extra_mixing_layers,"
@@ -126,11 +127,12 @@ def test_mixture_model(
                 input_symbols,
                 output_symbols,
                 exogenous_dimension=exogenous_dim,
-                output_head_factory=architecture.MultivariateHead,
+                output_head_factory=architecture.MultivariateMixtureHead,
                 feature_dimension=feature_dim,
                 mixture_components=mixture_components,
                 extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
+                risk_neutral=False,
             )
     else:
         # This is the base mixture model we're testing.
@@ -139,11 +141,12 @@ def test_mixture_model(
             input_symbols,
             output_symbols,
             exogenous_dimension=exogenous_dim,
-            output_head_factory=architecture.MultivariateHead,
+            output_head_factory=architecture.MultivariateMixtureHead,
             feature_dimension=feature_dim,
             mixture_components=mixture_components,
             extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
+            risk_neutral=False,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
@@ -218,12 +221,12 @@ def test_mixture_model(
     "head_class, batch_size, input_symbols, output_symbols, feature_dim,"
     "mixture_components, expect_value_error",
     [
-        (architecture.MultivariateHead, 13, 3, None, 5, 7, False),
-        (architecture.MultivariateHead, 13, 3, 3, 5, 7, False),
-        (architecture.MultivariateHead, 13, 3, 2, 5, 7, False),
-        (architecture.UnivariateHead, 13, 1, 1, 5, 7, False),
-        (architecture.UnivariateHead, 13, 3, None, 5, 7, True),
-        (architecture.UnivariateHead, 13, 3, 3, 5, 7, True),
+        (architecture.MultivariateMixtureHead, 13, 3, None, 5, 7, False),
+        (architecture.MultivariateMixtureHead, 13, 3, 3, 5, 7, False),
+        (architecture.MultivariateMixtureHead, 13, 3, 2, 5, 7, False),
+        (architecture.UnivariateMixtureHead, 13, 1, 1, 5, 7, False),
+        (architecture.UnivariateMixtureHead, 13, 3, None, 5, 7, True),
+        (architecture.UnivariateMixtureHead, 13, 3, 3, 5, 7, True),
     ],
 )
 def test_head_classes(

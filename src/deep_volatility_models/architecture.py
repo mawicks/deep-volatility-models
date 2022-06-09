@@ -443,6 +443,10 @@ class MixtureModel(torch.nn.Module):
             mixture_components,
         )
 
+        if risk_neutral and (input_channels != 1 or output_channels != 1):
+            raise ValueError(
+                "Specifying risk_neutral is only possible with input_channels == 1 and output_channels == 1"
+            )
         self.risk_neutral = risk_neutral
 
     def forward_unpacked(
