@@ -34,15 +34,15 @@ EARLY_TERMINATION = 100  # Was 1000
 
 RISK_NEUTRAL = True
 if RISK_NEUTRAL:
-    OPT_LEARNING_RATE = 0.000538
-    OPT_DROPOUT = 0.001099
+    OPT_LEARNING_RATE = 0.000535
+    OPT_DROPOUT = 0.001675
     OPT_FEATURE_DIMENSION = 41
     OPT_MIXTURE_COMPONENTS = 4
     OPT_WINDOW_SIZE = 256
     OPT_EMBEDDING_DIMENSION = 4
     OPT_MINIBATCH_SIZE = 124
-    OPT_GAUSSIAN_NOISE = 0.002174
-    OPT_WEIGHT_DECAY = 1.349159e-06
+    OPT_GAUSSIAN_NOISE = 0.002789
+    OPT_WEIGHT_DECAY = 1.407138e-06
     USE_BATCH_NORM = False  # risk neutral version has trouble with batch normalization
 else:
     # Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
@@ -468,7 +468,7 @@ def run(
 
 @click.command()
 @click.option(
-    "--use_hsmd",
+    "--use-hsmd",
     default=None,
     show_default=True,
     help="Use huge stock market dataset if specified zip file (else use yfinance)",
@@ -480,7 +480,7 @@ def run(
     help="Trained model output file.",
 )
 @click.option(
-    "--existing_model",
+    "--existing-model",
     default=None,
     show_default=True,
     help="Existing model to load (for tuning).",
@@ -494,49 +494,55 @@ def run(
     help="Refresh stock data",
 )
 @click.option(
-    "--risk_neutral",
+    "--risk-neutral/--no-risk-neutral",
     is_flag=True,
     default=RISK_NEUTRAL,
     show_default=True,
     help="Use risk-neutral adjustment on predicted mean returns",
 )
 @click.option(
-    "--only_embeddings",
+    "--only-embeddings",
     is_flag=True,
     default=False,
     show_default=True,
     help="Train only the embeddings",
 )
 @click.option(
-    "--early_termination",
+    "--early-termination",
     default=EARLY_TERMINATION,
     show_default=True,
     help="Terminate if no improvement in this number of iterations",
 )
 @click.option(
-    "--learning_rate", default=OPT_LEARNING_RATE, show_default=True, type=float
+    "--learning-rate", default=OPT_LEARNING_RATE, show_default=True, type=float
 )
 @click.option("--dropout", default=OPT_DROPOUT, show_default=True, type=float)
 @click.option(
-    "--feature_dimension", default=OPT_FEATURE_DIMENSION, show_default=True, type=int
+    "--use-batch-norm/--no-use-batch-norm",
+    is_flag=True,
+    default=USE_BATCH_NORM,
+    show_default=True,
 )
 @click.option(
-    "--mixture_components", default=OPT_MIXTURE_COMPONENTS, show_default=True, type=int
+    "--feature-dimension", default=OPT_FEATURE_DIMENSION, show_default=True, type=int
 )
-@click.option("--window_size", default=OPT_WINDOW_SIZE, show_default=True, type=int)
 @click.option(
-    "--embedding_dimension",
+    "--mixture-components", default=OPT_MIXTURE_COMPONENTS, show_default=True, type=int
+)
+@click.option("--window-size", default=OPT_WINDOW_SIZE, show_default=True, type=int)
+@click.option(
+    "--embedding-dimension",
     default=OPT_EMBEDDING_DIMENSION,
     show_default=True,
     type=int,
 )
 @click.option(
-    "--minibatch_size", default=OPT_MINIBATCH_SIZE, show_default=True, type=int
+    "--minibatch-size", default=OPT_MINIBATCH_SIZE, show_default=True, type=int
 )
 @click.option(
-    "--gaussian_noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
+    "--gaussian-noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
 )
-@click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
+@click.option("--weight-decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
 @click.option("--seed", default=DEFAULT_SEED, show_default=True, type=int)
 def main_cli(
     use_hsmd,
@@ -549,6 +555,7 @@ def main_cli(
     early_termination,
     learning_rate,
     dropout,
+    use_batch_norm,
     feature_dimension,
     mixture_components,
     window_size,
@@ -569,6 +576,7 @@ def main_cli(
         early_termination=early_termination,
         learning_rate=learning_rate,
         dropout=dropout,
+        use_batch_norm=use_batch_norm,
         feature_dimension=feature_dimension,
         mixture_components=mixture_components,
         window_size=window_size,
