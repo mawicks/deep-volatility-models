@@ -28,7 +28,8 @@ from deep_volatility_models import time_series_datasets
 
 pd.set_option("display.width", None)
 pd.set_option("display.max_columns", None)
-pd.set_option("display.min_rows", 10)
+pd.set_option("display.min_rows", None)
+pd.set_option("display.max_rows", 1500)
 
 # Configure external packages and run()
 logging.basicConfig(format="%(levelname)s:%(message)s", level=logging.INFO, force=True)
@@ -59,7 +60,7 @@ def simulate(model, symbol, window):
     simulated_returns = simulated_returns.squeeze(1).squeeze(0).numpy()
     logging.info(f"mean return: {np.mean(simulated_returns)}")
     simulated_returns = np.concatenate(
-        [[0.0], simulated_returns - np.mean(simulated_returns)]
+        [[0.0], simulated_returns - 0 * np.mean(simulated_returns)]
     )
     sample_index = list(
         range(
@@ -150,6 +151,9 @@ def do_one_symbol(
                 "p_non_base": 1.0 - torch.max(p, dim=1)[0],
                 "pred_sigma": daily_std_dev,
                 "base_sigma": dominant_component_sigma,
+                "p": map(lambda x: x.numpy(), p),
+                "mu": map(lambda x: x.numpy(), mu),
+                "sigma_inv": map(lambda x: x.numpy(), sigma_inv),
             },
             index=dates,
         )
@@ -170,10 +174,15 @@ def do_one_symbol(
                 "p_non_base",
                 "pred_sigma",
                 "base_sigma",
+                "p",
+                "mu",
+                "sigma_inv",
             ]
         ]
 
-        return_df = df[["log_return", "pred_return", "pred_volatility"]]
+        return_df = df[
+            ["log_return", "pred_return", "pred_volatility", "p", "mu", "sigma_inv"]
+        ]
         return return_df
 
 
