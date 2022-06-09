@@ -234,18 +234,18 @@ class UnivariateHead(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels: int,
-        output_channels: Union[int, None],
+        input_symbols: int,
+        output_symbols: Union[int, None],
         feature_dimension: int,
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
+        if output_symbols is None:
+            output_symbols = input_symbols
 
-        if input_channels != 1 or output_channels != 1:
+        if input_symbols != 1 or output_symbols != 1:
             raise ValueError(
-                "UnivariateHead requires input_channels == output_channels == 1"
+                "UnivariateHead requires input_symbols == output_symbols == 1"
             )
 
         # mu_head turns feature vector into a single mu estiamte.
@@ -282,19 +282,19 @@ class UnivariateMixtureHead(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels: int,
-        output_channels: Union[int, None],
+        input_symbols: int,
+        output_symbols: Union[int, None],
         feature_dimension: int,
         mixture_components: int,
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
+        if output_symbols is None:
+            output_symbols = input_symbols
 
-        if input_channels != 1 or output_channels != 1:
+        if input_symbols != 1 or output_symbols != 1:
             raise ValueError(
-                "UnivariateMixtureHead requires input_channels == output_channels == 1"
+                "UnivariateMixtureHead requires input_symbols == output_symbols == 1"
             )
 
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
@@ -329,20 +329,20 @@ class MultivariateMixtureHead(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels: int,
-        output_channels: Union[int, None],
+        input_symbols: int,
+        output_symbols: Union[int, None],
         feature_dimension: int,
         mixture_components: int,
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
+        if output_symbols is None:
+            output_symbols = input_symbols
 
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
 
         self.mu_head = torch.nn.ConvTranspose1d(
-            feature_dimension, mixture_components, output_channels
+            feature_dimension, mixture_components, output_symbols
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -352,7 +352,7 @@ class MultivariateMixtureHead(torch.nn.Module):
         self.sigma_inv_head = torch.nn.ConvTranspose2d(
             feature_dimension,
             mixture_components,
-            (output_channels, input_channels),
+            (output_symbols, input_symbols),
         )
 
     def forward(self, latents: torch.Tensor):
@@ -381,8 +381,8 @@ class MultivariateMixtureHead(torch.nn.Module):
 
         # FIXME:  For compatibility with previously saved models
         # we get the shape from sigma_inv rather than from object state.
-        output_channels, input_channels = sigma_inv.shape[2:]
-        sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
+        output_symbols, input_symbols = sigma_inv.shape[2:]
+        sigma_inv = torch.tril(sigma_inv, diagonal=(input_symbols - output_symbols))
 
         return log_p, mu, sigma_inv
 
@@ -407,8 +407,8 @@ class MixtureModel(torch.nn.Module):
     def __init__(
         self,
         window_size: int,
-        input_channels: int,
-        output_channels: Union[int, None] = None,
+        input_symbols: int,
+        output_symbols: Union[int, None] = None,
         output_head_factory: Callable[
             [int, Union[int, None], int, int], torch.nn.Module
         ] = UnivariateMixtureHead,
@@ -425,7 +425,7 @@ class MixtureModel(torch.nn.Module):
         super().__init__()
 
         self.time_series_features = TimeSeriesFeatures(
-            input_channels,
+            input_symbols,
             window_size,
             feature_dimension=feature_dimension,
             exogenous_dimension=exogenous_dimension,
@@ -437,15 +437,15 @@ class MixtureModel(torch.nn.Module):
         )
 
         self.head = output_head_factory(
-            input_channels,
-            output_channels,
+            input_symbols,
+            output_symbols,
             feature_dimension,
             mixture_components,
         )
 
-        if risk_neutral and (input_channels != 1 or output_channels != 1):
+        if risk_neutral and (input_symbols != 1 or output_symbols != 1):
             raise ValueError(
-                "Specifying risk_neutral is only possible with input_channels == 1 and output_channels == 1"
+                "Specifying risk_neutral is only possible with input_symbols == 1 and output_symbols == 1"
             )
         self.risk_neutral = risk_neutral
 
