@@ -4,7 +4,7 @@ import math
 
 import torch
 
-import deep_volatility_models.stats as stats
+import deep_volatility_models.loss_functions as loss_functions
 
 LOG_SQRT_TWO_PI = 0.5 * math.log(2.0 * math.pi)
 # TODO: Why can't this be smaller?
@@ -45,5 +45,5 @@ EPS = 1e-7
     ],
 )
 def test_likelihood_cases(x, mu, sigma_inv, expected):
-    log_loss = stats.univariate_log_likelihood(x, mu, sigma_inv)
+    log_loss = loss_functions.univariate_log_likelihood(x, mu, sigma_inv)
     assert float(log_loss) == pytest.approx(expected, EPS)
