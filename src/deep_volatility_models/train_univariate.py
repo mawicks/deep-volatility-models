@@ -18,6 +18,7 @@ import torch.utils.data.dataloader
 from deep_volatility_models import data_sources
 from deep_volatility_models import stock_data
 from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import loss_functions
 from deep_volatility_models import time_series_datasets
 from deep_volatility_models import model_wrappers
 from deep_volatility_models import architecture
@@ -31,7 +32,7 @@ DEFAULT_SEED = 24  # Previously 42
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
-
+USE_MIXTURE = True
 RISK_NEUTRAL = True
 if RISK_NEUTRAL:
     OPT_LEARNING_RATE = 0.000535
@@ -81,8 +82,12 @@ def create_new_model(
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
     risk_neutral=RISK_NEUTRAL,
+    use_mixture=USE_MIXTURE,
 ):
-    default_network_class = architecture.MixtureModel
+    if use_mixture:
+        default_network_class = architecture.MixtureModel
+    else:
+        default_network_class = architecture.UnivariateModel
 
     network = default_network_class(
         window_size,
@@ -244,7 +249,7 @@ def prepare_data(
     return train_dataloader, validation_dataloader
 
 
-def make_loss_function():
+def make_mixture_loss_function():
     def loss_function(output, target):
         log_p, mu, inv_sigma = output[:3]
 
@@ -264,7 +269,24 @@ def make_loss_function():
     return loss_function
 
 
-def log_mean_error(epoch, output, target):
+def make_loss_function():
+    def loss_function(output, target):
+        mu, inv_sigma = output[:2]
+
+        loss = -torch.mean(
+            loss_functions.univariate_log_likelihood(target.squeeze(2), mu, inv_sigma)
+        )
+
+        if np.isnan(float(loss)):
+            logging.error("mu: ", mu)
+            logging.error("inv_sigma: ", inv_sigma)
+
+        return loss
+
+    return loss_function
+
+
+def log_mixture_mean_error(epoch, output, target):
     log_p, mu = output[:2]
     mb_size, components, channels = mu.shape
     combined_mu = torch.sum(
@@ -275,10 +297,27 @@ def log_mean_error(epoch, output, target):
     logging.debug(f"epoch: {epoch} mean_error: {float(mean_error):.5f}")
 
 
-def make_validation_batch_logger():
+def make_mixture_validation_batch_logger():
     def log_epoch(epoch, batch, output, target, loss):
         log_p, mu, inv_sigma = output[:3]
         logging.debug(f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
+
+        log_mixture_mean_error(epoch, output, target)
+
+    return log_epoch
+
+
+def log_mean_error(epoch, output, target):
+    mu = output[0]
+    mean_error = torch.mean(target.squeeze(2) - mu, dim=0)
+    logging.debug(f"epoch: {epoch} mean_error: {float(mean_error):.5f}")
+
+
+def make_validation_batch_logger():
+    def log_epoch(epoch, batch, output, target, loss):
+        mu, inv_sigma = output[:2]
         logging.debug(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
         logging.debug(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
 
@@ -329,6 +368,7 @@ def run(
     refresh,
     risk_neutral,
     only_embeddings,
+    use_mixture=USE_MIXTURE,
     max_epochs=EPOCHS,
     early_termination=EARLY_TERMINATION,
     window_size=OPT_WINDOW_SIZE,
@@ -354,6 +394,8 @@ def run(
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
     logging.info(f"risk_neutral: {risk_neutral}")
+    logging.info(f"only_embeddings: {only_embeddings}")
+    logging.info(f"use_mixture: {use_mixture}")
     logging.info(f"window_size: {window_size}")
     logging.info(f"mixture_components: {mixture_components}")
     logging.info(f"feature_dimension: {feature_dimension}")
@@ -413,6 +455,7 @@ def run(
             feature_dimension=feature_dimension,
             embedding_dimension=embedding_dimension,
             gaussian_noise=gaussian_noise,
+            use_mixture=use_mixture,
             use_batch_norm=use_batch_norm,
             dropout=dropout,
             risk_neutral=risk_neutral,
@@ -441,8 +484,13 @@ def run(
         eps=ADAM_EPSILON,
     )
 
-    loss_function = make_loss_function()
-    validation_batch_callback = make_validation_batch_logger()
+    if use_mixture:
+        loss_function = make_mixture_loss_function()
+        validation_batch_callback = make_mixture_validation_batch_logger()
+    else:
+        loss_function = make_loss_function()
+        validation_batch_callback = make_validation_batch_logger()
+
     epoch_callback = make_epoch_callback(model)
     loss_improvement_callback = make_loss_improvement_callback(
         model_file, only_embeddings, model, encoding, symbols
@@ -508,6 +556,13 @@ def run(
     help="Train only the embeddings",
 )
 @click.option(
+    "--use-mixture/--no-mixture",
+    is_flag=True,
+    default=USE_MIXTURE,
+    show_default=True,
+    help="Use a mixture model?",
+)
+@click.option(
     "--early-termination",
     default=EARLY_TERMINATION,
     show_default=True,
@@ -552,6 +607,7 @@ def main_cli(
     refresh,
     risk_neutral,
     only_embeddings,
+    use_mixture,
     early_termination,
     learning_rate,
     dropout,
@@ -572,6 +628,7 @@ def main_cli(
         symbols=symbol,
         refresh=refresh,
         risk_neutral=risk_neutral,
+        use_mixture=use_mixture,
         only_embeddings=only_embeddings,
         early_termination=early_termination,
         learning_rate=learning_rate,

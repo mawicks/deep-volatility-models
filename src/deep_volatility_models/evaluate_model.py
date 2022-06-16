@@ -46,22 +46,29 @@ TIME_SAMPLES = 64
 
 
 def simulate(model, symbol, window):
-    # is a single row with shape: (symbols, window_size).
-    # Add a batch dimension (we'll doing a single row, so the batch dimension is one):
+    """
+    Arguments:
+        model: torch.nn.Module
+        symbol: str
+        window: single input row as a torch.Tensor of shape (symbols, window_size)
+    """
+    if model.is_mixture:
+        sampler = sample.multivariate_mixture_sample
+    else:
+        sampler = sample.multivariate_sample
+
+    # Create a batch dimension (we'll doing a single row, so the batch dimension is one):
     window = window.unsqueeze(0)
 
     logging.info(f"{symbol} window: {window.shape}")
     logging.info(f"{symbol} window]: {window}")
 
-    simulated_returns = sample.multivariate_mixture_sample(model, window, TIME_SAMPLES)
+    simulated_returns = sampler(model, window, TIME_SAMPLES)
     logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
 
-    historic_returns = window.squeeze(1).squeeze(0).numpy()[1:]
+    historic_returns = window.squeeze(1).squeeze(0).numpy()
     simulated_returns = simulated_returns.squeeze(1).squeeze(0).numpy()
     logging.info(f"mean return: {np.mean(simulated_returns)}")
-    simulated_returns = np.concatenate(
-        [[0.0], simulated_returns - 0 * np.mean(simulated_returns)]
-    )
     sample_index = list(
         range(
             len(historic_returns) - 1,
@@ -121,16 +128,28 @@ def do_one_symbol(
         dates = symbol_history.index[window_size - 1 :]
         logging.info(f"last date is {dates[-1]}")
 
-        log_p, mu, sigma_inv = model.network(windows)[:3]
-        p = torch.exp(log_p)
+        if model.network.is_mixture:
+            log_p, mu, sigma_inv = model.network(windows)[:3]
+            p = torch.exp(log_p)
 
-        logging.info(f"p: {p}")
-        logging.debug(f"mu: {mu}")
-        logging.debug(f"sigma_inv: {sigma_inv}")
+            logging.info(f"p: {p}")
+            logging.debug(f"mu: {mu}")
+            logging.debug(f"sigma_inv: {sigma_inv}")
 
-        mean, variance = mixture_model_stats.univariate_combine_metrics(
-            p, mu, sigma_inv
-        )
+            mean, variance = mixture_model_stats.univariate_combine_metrics(
+                p, mu, sigma_inv
+            )
+        else:
+            mu, sigma_inv = model.network(windows)[:2]
+
+            logging.debug(f"mu: {mu}")
+            logging.debug(f"sigma_inv: {sigma_inv}")
+
+            sigma = torch.inverse(sigma_inv)
+            mean = mu.squeeze(1)
+            variance = (sigma.squeeze(2).squeeze(1)) ** 2
+            p = torch.ones((mean.shape[0],))
+
         annual_return = ANNUAL_TRADING_DAYS * mean
         daily_std_dev = np.sqrt(variance)
         volatility = np.sqrt(ANNUAL_TRADING_DAYS) * daily_std_dev
@@ -141,16 +160,11 @@ def do_one_symbol(
         logging.debug(f"annual return: {annual_return}")
         logging.debug(f"annual volatility: {volatility}")
 
-        dominant_component_sigma = 1 / torch.max(sigma_inv, dim=1)[0]
-        dominant_component_sigma = dominant_component_sigma.squeeze(2).squeeze(1)
-
         df = pd.DataFrame(
             {
                 "pred_volatility": volatility,
                 "pred_return": mean,
-                "p_non_base": 1.0 - torch.max(p, dim=1)[0],
                 "pred_sigma": daily_std_dev,
-                "base_sigma": dominant_component_sigma,
                 "p": map(lambda x: x.numpy(), p),
                 "mu": map(lambda x: x.numpy(), mu),
                 "sigma_inv": map(lambda x: x.numpy(), sigma_inv),
@@ -171,9 +185,7 @@ def do_one_symbol(
                 "log_return",
                 "close",
                 "pred_return",
-                "p_non_base",
                 "pred_sigma",
-                "base_sigma",
                 "p",
                 "mu",
                 "sigma_inv",

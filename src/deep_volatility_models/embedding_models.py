@@ -16,6 +16,10 @@ class SingleSymbolModelFromEmbedding(torch.nn.Module):
         # Client code reads the window_size attribute :(
         self.window_size = network.window_size
 
+    @property
+    def is_mixture(self):
+        return self.network.is_mixture
+
     def forward(self, window: torch.Tensor) -> torch.Tensor:
         minibatch_dim = window.shape[0]
         embedding_dim = len(self.single_embedding)
