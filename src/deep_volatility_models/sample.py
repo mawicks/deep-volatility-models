@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Tuple, Union
 
 # Common packages
 import torch
@@ -6,7 +6,7 @@ import torch
 
 def multivariate_mixture_sample(
     mixture_model: torch.nn.Module,
-    window: torch.Tensor,
+    predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     sample_size: int,
     normalize: bool = False,
     n_sigma=1,
@@ -14,27 +14,27 @@ def multivariate_mixture_sample(
     """Draw samples from a mixture model
     Parameters:
         mixture_model: torch.nn.Module - The model to evaluate_model
-        window: torch.Tensor of shape (batch_size, symbols, window_size)
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+          First element of predictors is a window: torch.Tensor of shape (batch_size, symbols, window_size)
         sample_size: int - The number of samples to draw
         normalize: bool - Draw samples that are a fixed number of standard
         deviations away (useful for generating multivariate contours of points that are
         n-sigma from the mean, but not useful for univariate distributions).
         n_sigma: int - The number of standard deviations away to generate
-        samples (only applicable when `normalize` is True)
+        samples (only used when `normalize` is True)
 
     Returns:
         torch.Tensor of shape (batch_size, symbols, sample_size) - Log returns
-        sampled from the model's distribution
+        sampled from the model's distribution.  Note that a "sample" represents
+        the distribution at a particular moment in time and does not generate a simulated
+        time series.
 
     Note:
-        The first 'sample' returned is always zero so that the current
-        'day 0' daily return can be added to the current day's closing
-        price without changing it.
-        Last dimension of returned sample tensor is sample_size+1 because the first
-        position isn't actually sajmpled.
+        In the case that `predictors` is not a tuple, it is assumed to be
+        the time_series portion.
 
     """
-    log_p, mu, sigma_inv = mixture_model(window)[:3]
+    log_p, mu, sigma_inv = mixture_model(predictors)[:3]
     p = torch.exp(log_p)
 
     batch_size, _, symbols = mu.shape
@@ -50,7 +50,7 @@ def multivariate_mixture_sample(
     # zero has been applied.  This avoids having to do some awkward indexing
     # elsewhere.
 
-    samples = torch.zeros(batch_size, symbols, 1)
+    samples = torch.Tensor([])
 
     for _ in range(sample_size):
         selections = torch.multinomial(p, 1)
@@ -86,7 +86,7 @@ def multivariate_mixture_sample(
 
 def multivariate_sample(
     model: torch.nn.Module,
-    window: torch.Tensor,
+    predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     sample_size: int,
     normalize: bool = False,
     n_sigma=1,
@@ -94,27 +94,26 @@ def multivariate_sample(
     """Draw samples from a mixture model
     Parameters:
         model: torch.nn.Module - The model to evaluate_model
-        window: torch.Tensor of shape (batch_size, symbols, window_size)
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+          First element of predictors is a window: torch.Tensor of shape (batch_size, symbols, window_size)
         sample_size: int - The number of samples to draw
         normalize: bool - Draw samples that are a fixed number of standard
         deviations away (useful for generating multivariate contours of points that are
         n-sigma from the mean, but not useful for univariate distributions).
         n_sigma: int - The number of standard deviations away to generate
-        samples (only applicable when `normalize` is True)
+        samples (only used when `normalize` is True)
 
     Returns:
-        torch.Tensor of shape (batch_size, symbols, sample_size+1) - Log returns
-        sampled from the model's distribution
+        torch.Tensor of shape (batch_size, symbols, sample_size) - Log returns
+        sampled from the model's distribution  Note that a "sample" represents
+        the distribution at a particular moment in time and does not generate a simulated
+        time series.
 
     Note:
-        The first 'sample' returned is always zero so that the current
-        'day 0' daily return can be added to the current day's closing
-        price without changing it.
-        Last dimension of returned sample tensor is sample_size+1 because the first
-        position isn't actually sajmpled.
-
+        In the case that `predictors` is not a tuple, it is assumed to be
+        the time_series portion.
     """
-    mu, sigma_inv = model(window)[:2]
+    mu, sigma_inv = model(predictors)[:2]
     sigma = torch.inverse(
         sigma_inv
     )  # Removed a  .squeeze(1) from multivariate implementation
@@ -132,7 +131,7 @@ def multivariate_sample(
     # zero has been applied.  This avoids having to do some awkward indexing
     # elsewhere.
 
-    samples = torch.zeros(batch_size, symbols, 1)
+    samples = torch.Tensor([])
     for _ in range(sample_size):
         z = torch.randn(batch_size, symbols, 1)
         if normalize:
@@ -151,35 +150,46 @@ def multivariate_sample(
     return samples.detach()
 
 
-def multivariate_mixture_simulate(
+def simulate_one(
+    model: torch.nn.Module,
     sampler: Callable[[torch.nn.Module, torch.Tensor, int, bool, int], torch.tensor],
-    mixture_model: torch.nn.Module,
-    window: torch.Tensor,
+    predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     time_samples: int,
 ):
     """
-    For each row of `window`, generate simulated log returns for `time_samples` intervals
+    For each row of `predoctors`, generate simulated log returns for `time_samples` intervals
 
     Parameters:
-        mixture_model: torch.nn.Module - model to evaluate
-        window: torch.Tensor of shape (minibatch, symbols, window_size)
+        model: torch.nn.Module - model to evaluate
+        sampler: Callable[[torch.nn.Module, torch.Tensor, int, bool, int], torch.tensor] - samples the distribution returned by the model.
+           The sampler must be compatible with the model (e.g., a mixture model sampler or a non-mixture model sampler depending on the model).
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+          First element of predictors is a window: torch.Tensor of shape (minibatch, symbols, window_size)
         time_samples: number of time intervals to simulate.
 
     Returns:
-        torch.Tensor of shape (batch_size, symbols, time_samples+1) - Time series
+        torch.Tensor of shape (batch_size, symbols, time_samples+1) - For each batch row, a single time series
         containing the simulated log returns.
 
     Notes:
         Last dimension of sample is sample_size+1 because the first
-        position isn't actually sajmpled.  An artificial zero sample
+        position isn't actually sampled.  An artificial zero sample
         is inserted in the first position.
     """
 
-    batches, symbols = window.shape[:2]
-    simulation = torch.Tensor([])
+    if isinstance(predictors, tuple):
+        window, exogenous = predictors
+        make_predictors = lambda window, exogenous: tuple(window, exogenous)
+    else:
+        window = predictors
+        exogenous = None
+        make_predictors = lambda window, exogenous: window
+
+    batch_size, symbols = window.shape[:2]
+    simulation = torch.zeros(batch_size, symbols, 1)
 
     for _ in range(time_samples):
-        next_values = sampler(mixture_model, window, 1)
+        next_values = sampler(model, make_predictors(window, exogenous), 1)
         print("next_values: ", next_values)
         window = torch.cat([window[:, :, 1:], next_values], dim=2)
         simulation = torch.cat((simulation, next_values), dim=2)
@@ -187,20 +197,20 @@ def multivariate_mixture_simulate(
     return simulation
 
 
-def multivariate_mixture_simulate_many(
+def simulate_many(
+    model: torch.nn.Module,
     sampler: Callable[[torch.nn.Module, torch.Tensor, int, bool, int], torch.tensor],
-    mixture_model: torch.nn.Module,
-    window: torch.Tensor,
+    predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     time_samples: int,
     simulation_count: int,
 ):
     """
-    This is a wrapper that calls multiariate_mixture_simulate `simulation_count` times.
+    This is a wrapper that calls simulate_one `simulation_count` times.
     """
 
     simulations = torch.stack(
         tuple(
-            multivariate_mixture_simulate(sampler, mixture_model, window, time_samples)
+            simulate_one(model, sampler, predictors, time_samples)
             for _ in range(simulation_count)
         )
     )

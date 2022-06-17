@@ -63,7 +63,7 @@ def simulate(model, symbol, window):
     logging.info(f"{symbol} window: {window.shape}")
     logging.info(f"{symbol} window]: {window}")
 
-    simulated_returns = sampler(model, window, TIME_SAMPLES)
+    simulated_returns = sample.simulate_one(model, sampler, window, TIME_SAMPLES)
     logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
 
     historic_returns = window.squeeze(1).squeeze(0).numpy()
