@@ -52,18 +52,13 @@ def simulate(model, symbol, window):
         symbol: str
         window: single input row as a torch.Tensor of shape (symbols, window_size)
     """
-    if model.is_mixture:
-        sampler = sample.multivariate_mixture_sample
-    else:
-        sampler = sample.multivariate_sample
-
     # Create a batch dimension (we'll doing a single row, so the batch dimension is one):
     window = window.unsqueeze(0)
 
     logging.info(f"{symbol} window: {window.shape}")
     logging.info(f"{symbol} window]: {window}")
 
-    simulated_returns = sample.simulate_one(model, sampler, window, TIME_SAMPLES)
+    simulated_returns = model.simulate_one(window, TIME_SAMPLES)
     logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
 
     historic_returns = window.squeeze(1).squeeze(0).numpy()

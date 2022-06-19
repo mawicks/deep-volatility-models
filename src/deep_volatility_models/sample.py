@@ -152,12 +152,11 @@ def multivariate_sample(
 
 def simulate_one(
     model: torch.nn.Module,
-    sampler: Callable[[torch.nn.Module, torch.Tensor, int, bool, int], torch.tensor],
     predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     time_samples: int,
 ):
     """
-    For each row of `predoctors`, generate simulated log returns for `time_samples` intervals
+    For each row of `predictors`, generate simulated log returns for `time_samples` intervals
 
     Parameters:
         model: torch.nn.Module - model to evaluate
@@ -179,7 +178,7 @@ def simulate_one(
 
     if isinstance(predictors, tuple):
         window, exogenous = predictors
-        make_predictors = lambda window, exogenous: tuple(window, exogenous)
+        make_predictors = lambda window, exogenous: (window, exogenous)
     else:
         window = predictors
         exogenous = None
@@ -188,6 +187,7 @@ def simulate_one(
     batch_size, symbols = window.shape[:2]
     simulation = torch.zeros(batch_size, symbols, 1)
 
+    sampler = model.sample
     for _ in range(time_samples):
         next_values = sampler(model, make_predictors(window, exogenous), 1)
         print("next_values: ", next_values)

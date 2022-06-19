@@ -7,6 +7,7 @@ import torch.nn
 
 # Local imports
 from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import sample
 
 # Instances of various activation functions for convenience
 relu = torch.nn.ReLU()
@@ -90,10 +91,6 @@ class TimeSeriesFeatures(torch.nn.Module):
     """
     TODO
     """
-
-    @property
-    def window_size(self) -> int:
-        return int(self._window_size)
 
     def __init__(
         self,
@@ -184,6 +181,10 @@ class TimeSeriesFeatures(torch.nn.Module):
             )
 
         self.blend_exogenous = torch.nn.Sequential(*blend_exogenous_layers)
+
+    @property
+    def window_size(self) -> int:
+        return int(self._window_size)
 
     def forward(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -396,15 +397,7 @@ def risk_neutral_drift(mu, sigma_inv):
 
 
 class UnivariateModel(torch.nn.Module):
-    """TODO"""
-
-    @property
-    def is_mixture(self) -> bool:
-        return False
-
-    @property
-    def window_size(self) -> int:
-        return self.time_series_features.window_size
+    """Univariate mode that's not a mixture model"""
 
     def __init__(
         self,
@@ -443,6 +436,25 @@ class UnivariateModel(torch.nn.Module):
         )
 
         self.risk_neutral = risk_neutral
+
+    @property
+    def sample(self):
+        return sample.multivariate_sample
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
+
+    @property
+    def is_mixture(self) -> bool:
+        return False
+
+    @property
+    def window_size(self) -> int:
+        return self.time_series_features.window_size
 
     def forward_unpacked(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -502,14 +514,6 @@ def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
 class MixtureModel(torch.nn.Module):
     """TODO"""
 
-    @property
-    def is_mixture(self) -> bool:
-        return True
-
-    @property
-    def window_size(self) -> int:
-        return self.time_series_features.window_size
-
     def __init__(
         self,
         window_size: int,
@@ -555,6 +559,25 @@ class MixtureModel(torch.nn.Module):
                 f"but input_symbosl={input_symbols} and output_symbols={output_symbols}"
             )
         self.risk_neutral = risk_neutral
+
+    @property
+    def is_mixture(self) -> bool:
+        return True
+
+    @property
+    def window_size(self) -> int:
+        return self.time_series_features.window_size
+
+    @property
+    def sample(self):
+        return sample.multivariate_mixture_sample
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
 
     def forward_unpacked(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -607,7 +630,7 @@ class MixtureModel(torch.nn.Module):
 
 class ModelWithEmbedding(torch.nn.Module):
     """
-    This is a wrapper for a model.  The wrapper preprocesses an emcoding into an
+    This is a wrapper for a model.  The wrapper preprocesses an encoding into an
     embedding before calling the model.  This decouples the embedding from the
     training of the rest of the model.  The embedding can be replaced or
     retrained without changing anything in the model.  The caller is responsible
@@ -651,6 +674,21 @@ class ModelWithEmbedding(torch.nn.Module):
         self.embedding = embedding
 
     @property
+    def sample(self):
+        return self.model.sample
+
+    def simulate_one(
+        self,
+        predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(
+            self,
+            predictors_plus_encoding,
+            time_samples,
+        )
+
+    @property
     def is_mixture(self):
         return self.model.is_mixture
 
@@ -659,7 +697,7 @@ class ModelWithEmbedding(torch.nn.Module):
     ) -> Any:
         """
         Arguments:
-            predictors: Tuple[torch.Tensor, torch.Tensor] - The first position
+            predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor] - The first position
             of the tuple could be any predictor vector (though here it's
             typically a time series window) intended to be passed to
             convolutional layers in `self.model.`  The second position is an
@@ -670,6 +708,5 @@ class ModelWithEmbedding(torch.nn.Module):
 
         """
         predictors, encoding = predictors_plus_encoding
-
         embeddings = self.embedding(encoding)
         return self.model((predictors, embeddings))

@@ -5,6 +5,7 @@ import torch
 
 # Local packages
 import deep_volatility_models.model_wrappers as model_wrappers
+from deep_volatility_models import sample
 
 
 class SingleSymbolModelFromEmbedding(torch.nn.Module):
@@ -20,14 +21,33 @@ class SingleSymbolModelFromEmbedding(torch.nn.Module):
     def is_mixture(self):
         return self.network.is_mixture
 
-    def forward(self, window: torch.Tensor) -> torch.Tensor:
+    def make_predictors(self, window: torch.Tensor) -> torch.Tensor:
+        """
+        Combine the `window` and the `embedding` to make `predictors` input for
+        use with the underlying network.
+        """
+
         minibatch_dim = window.shape[0]
         embedding_dim = len(self.single_embedding)
         embedding = self.single_embedding.unsqueeze(0).expand(
             minibatch_dim, embedding_dim
         )
+        predictors = (window, embedding)
+        return predictors
 
-        return self.network.forward((window, embedding))
+    def simulate_one(
+        self,
+        window: torch.Tensor,
+        time_samples: int,
+    ):
+        return sample.simulate_one(
+            self.network,
+            self.make_predictors(window),
+            time_samples,
+        )
+
+    def forward(self, window: torch.Tensor) -> torch.Tensor:
+        return self.network.forward(self.make_predictors(window))
 
 
 def SingleSymbolModelFactory(
