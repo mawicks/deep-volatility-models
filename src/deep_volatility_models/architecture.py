@@ -438,7 +438,7 @@ class UnivariateModel(torch.nn.Module):
         self.risk_neutral = risk_neutral
 
     @property
-    def sample(self):
+    def sampler(self):
         return sample.multivariate_sample
 
     def simulate_one(
@@ -569,7 +569,7 @@ class MixtureModel(torch.nn.Module):
         return self.time_series_features.window_size
 
     @property
-    def sample(self):
+    def sampler(self):
         return sample.multivariate_mixture_sample
 
     def simulate_one(
@@ -674,7 +674,7 @@ class ModelWithEmbedding(torch.nn.Module):
         self.embedding = embedding
 
     @property
-    def sample(self):
+    def sampler(self):
         return self.model.sample
 
     def simulate_one(

@@ -187,7 +187,7 @@ def simulate_one(
     batch_size, symbols = window.shape[:2]
     simulation = torch.zeros(batch_size, symbols, 1)
 
-    sampler = model.sample
+    sampler = model.sampler
     for _ in range(time_samples):
         next_values = sampler(model, make_predictors(window, exogenous), 1)
         print("next_values: ", next_values)
@@ -199,7 +199,6 @@ def simulate_one(
 
 def simulate_many(
     model: torch.nn.Module,
-    sampler: Callable[[torch.nn.Module, torch.Tensor, int, bool, int], torch.tensor],
     predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
     time_samples: int,
     simulation_count: int,
@@ -210,7 +209,7 @@ def simulate_many(
 
     simulations = torch.stack(
         tuple(
-            simulate_one(model, sampler, predictors, time_samples)
+            model.simulate_one(predictors, time_samples)
             for _ in range(simulation_count)
         )
     )
