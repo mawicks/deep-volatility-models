@@ -211,7 +211,8 @@ def simulate_many(
         tuple(
             model.simulate_one(predictors, time_samples)
             for _ in range(simulation_count)
-        )
+        ),
+        dim=3,
     )
     return simulations
 
