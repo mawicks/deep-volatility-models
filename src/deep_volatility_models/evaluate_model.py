@@ -43,9 +43,10 @@ ANNUAL_TRADING_DAYS = 252.0
 ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
 
 TIME_SAMPLES = 64
+SIMULATIONS = 2
 
 
-def simulate(model, symbol, window):
+def simulate(model, symbol, window, current_price):
     """
     Arguments:
         model: torch.nn.Module
@@ -59,20 +60,30 @@ def simulate(model, symbol, window):
     logging.info(f"{symbol} window]: {window}")
 
     simulated_returns = model.simulate_one(window, TIME_SAMPLES)
+    simulated_returns_many = sample.simulate_many(
+        model, window, TIME_SAMPLES, SIMULATIONS
+    )
+
     logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
 
     historic_returns = window.squeeze(1).squeeze(0).numpy()
-    simulated_returns = simulated_returns.squeeze(1).squeeze(0).numpy()
-    logging.info(f"mean return: {np.mean(simulated_returns)}")
+    simulated_returns_many = simulated_returns_many.squeeze(1).squeeze(0).numpy()
+
+    logging.info(f"mean return: {np.mean(simulated_returns_many)}")
     sample_index = list(
         range(
             len(historic_returns) - 1,
-            len(historic_returns) + len(simulated_returns) - 1,
+            len(historic_returns) + len(simulated_returns_many) - 1,
         )
     )
     cum_historic_returns = np.cumsum(historic_returns)
-    plt.plot(cum_historic_returns)
-    plt.plot(sample_index, cum_historic_returns[-1] + np.cumsum(simulated_returns))
+    plt.plot(current_price * np.exp(cum_historic_returns - cum_historic_returns[-1]))
+    for _ in range(SIMULATIONS):
+        plt.plot(
+            sample_index,
+            current_price * np.exp(np.cumsum(simulated_returns_many[:, _])),
+            "-.",
+        )
 
 
 def do_one_symbol(
@@ -105,6 +116,7 @@ def do_one_symbol(
     # Since we pass just one symbol rather than a list, use
     # next to grab the first (symbol, dataframe) pair, then [1] to grab the data.
     symbol_history = next(history_loader(symbol))[1]
+    current_price = symbol_history.close[-1]
     windowed_returns = time_series_datasets.RollingWindow(
         symbol_history.log_return,
         window_size,
@@ -113,7 +125,7 @@ def do_one_symbol(
     logging.debug(f"{symbol} windowed_returns[0]: {windowed_returns[0].shape}")
     logging.debug(f"{symbol} windowed_returns[0]: {windowed_returns[0]}")
 
-    simulate(model.network, symbol, windowed_returns[-1])
+    simulate(model.network, symbol, windowed_returns[-1], current_price)
 
     with torch.no_grad():
 
