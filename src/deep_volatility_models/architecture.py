@@ -263,6 +263,10 @@ class UnivariateHead(torch.nn.Module):
 
         sigma_inv = sigma_inv.unsqueeze(2)
 
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
+
         return mu, sigma_inv
 
 
@@ -309,6 +313,10 @@ class UnivariateMixtureHead(torch.nn.Module):
         log_p = logsoftmax(self.p_head(latents))
         mu = self.mu_head(latents).unsqueeze(2)
         sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
+
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
         return log_p, mu, sigma_inv
 
@@ -375,6 +383,10 @@ class MultivariateMixtureHead(torch.nn.Module):
         output_symbols, input_symbols = sigma_inv.shape[2:]
         sigma_inv = torch.tril(sigma_inv, diagonal=(input_symbols - output_symbols))
 
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
+
         return log_p, mu, sigma_inv
 
 
@@ -393,7 +405,7 @@ def risk_neutral_drift(mu, sigma_inv):
         )
 
     variance = sigma_inv ** (-2)
-    return -0.5 * variance.squeeze(2)
+    return (-0.5 * variance.squeeze(2)), sigma_inv
 
 
 class UnivariateModel(torch.nn.Module):
@@ -473,10 +485,6 @@ class UnivariateModel(torch.nn.Module):
 
         mu, sigma_inv = self.head(latents)
 
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
-
         return mu, sigma_inv, latents
 
     def forward(
@@ -492,12 +500,13 @@ class UnivariateModel(torch.nn.Module):
         if not isinstance(predictors, tuple):
             predictors = (predictors, None)
 
-        mu, sigma_inv, latents = self.forward_unpacked(*predictors)
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
 
         if hasattr(self, "risk_neutral") and self.risk_neutral:
-            mu = risk_neutral_drift(mu, sigma_inv)
+            head_output = risk_neutral_drift(*head_output)
 
-        return mu, sigma_inv, latents
+        return head_output + (latents,)
 
 
 def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
@@ -507,7 +516,7 @@ def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
     log_mean_return = mu_c + 0.5 * var_c
     log_mean_return = log_mean_return.unsqueeze(1).unsqueeze(2).expand(mu.shape)
 
-    return mu - log_mean_return
+    return log_p, (mu - log_mean_return), sigma_inv
 
 
 class MixtureModel(torch.nn.Module):
@@ -600,10 +609,6 @@ class MixtureModel(torch.nn.Module):
 
         log_p, mu, sigma_inv = self.head(latents)
 
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
-
         return log_p, mu, sigma_inv, latents
 
     def forward(
@@ -619,12 +624,13 @@ class MixtureModel(torch.nn.Module):
         if not isinstance(predictors, tuple):
             predictors = (predictors, None)
 
-        log_p, mu, sigma_inv, latents = self.forward_unpacked(*predictors)
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
 
         if hasattr(self, "risk_neutral") and self.risk_neutral:
-            mu = mixture_risk_neutral_adjustment(log_p, mu, sigma_inv)
+            head_output = mixture_risk_neutral_adjustment(*head_output)
 
-        return log_p, mu, sigma_inv, latents
+        return head_output + (latents,)
 
 
 class ModelWithEmbedding(torch.nn.Module):
