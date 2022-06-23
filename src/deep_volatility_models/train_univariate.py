@@ -85,22 +85,31 @@ def create_new_model(
     use_mixture=USE_MIXTURE,
 ):
     if use_mixture:
-        default_network_class = architecture.MixtureModel
+        network = architecture.MixtureModel(
+            window_size,
+            1,
+            feature_dimension=feature_dimension,
+            mixture_components=mixture_components,
+            exogenous_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+            activation=ACTIVATION,
+            risk_neutral=risk_neutral,
+        )
     else:
-        default_network_class = architecture.UnivariateModel
+        network -= architecture.UnivariateModel(
+            window_size,
+            feature_dimension=feature_dimension,
+            mixture_components=mixture_components,
+            exogenous_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+            activation=ACTIVATION,
+            risk_neutral=risk_neutral,
+        )
 
-    network = default_network_class(
-        window_size,
-        1,
-        feature_dimension=feature_dimension,
-        mixture_components=mixture_components,
-        exogenous_dimension=embedding_dimension,
-        gaussian_noise=gaussian_noise,
-        dropout=dropout,
-        use_batch_norm=use_batch_norm,
-        activation=ACTIVATION,
-        risk_neutral=risk_neutral,
-    )
     embedding = torch.nn.Embedding(embedding_size, embedding_dimension)
 
     return network, embedding

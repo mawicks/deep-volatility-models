@@ -397,12 +397,11 @@ def risk_neutral_drift(mu, sigma_inv):
 
 
 class UnivariateModel(torch.nn.Module):
-    """Univariate mode that's not a mixture model"""
+    """Univariate model that's not a mixture model"""
 
     def __init__(
         self,
         window_size: int,
-        input_symbols: int,  # FIXME: This parameter should be removed.
         output_head_factory: Callable[
             [int],
             torch.nn.Module,

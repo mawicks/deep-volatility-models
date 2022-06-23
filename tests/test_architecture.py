@@ -219,26 +219,25 @@ def test_mixture_model(
 
 # TODO - Add test cases for risk_neutral=True
 @pytest.mark.parametrize(
-    "batch_size, window_size, input_symbols, feature_dim,"
+    "batch_size, window_size, feature_dim,"
     "exogenous_dim, extra_mixing_layers,"
     "use_batch_norm, expect_value_error",
     [
-        (13, 0, 1, 3, 7, 2, True, False),  # Window size of zero
-        (13, 4, 1, 3, 7, 2, True, False),  # Chnage window size to 4
-        (13, 16, 1, 3, 7, 2, True, False),  # Chnage window size to 16
-        (13, 64, 1, 3, 7, 2, True, False),  # Change window size to 64
-        (13, 256, 1, 3, 7, 2, True, False),  # Change window size to 256
-        (13, 64, 1, 3, 0, 2, True, False),  # Without an exogenous input
-        (13, 64, 1, 3, 7, 0, True, False),  # Without extra mixing layers
-        (13, 64, 1, 3, 7, 2, False, False),  # Without batch norm
-        (13, 60, 1, 3, 7, 2, True, True),  # Window size is not valid
-        (13, 0, 1, 3, 0, 2, True, True),  # No Window AND no exogenous input
+        (13, 0, 3, 7, 2, True, False),  # Window size of zero
+        (13, 4, 3, 7, 2, True, False),  # Chnage window size to 4
+        (13, 16, 3, 7, 2, True, False),  # Chnage window size to 16
+        (13, 64, 3, 7, 2, True, False),  # Change window size to 64
+        (13, 256, 3, 7, 2, True, False),  # Change window size to 256
+        (13, 64, 3, 0, 2, True, False),  # Without an exogenous input
+        (13, 64, 3, 7, 0, True, False),  # Without extra mixing layers
+        (13, 64, 3, 7, 2, False, False),  # Without batch norm
+        (13, 60, 3, 7, 2, True, True),  # Window size is not valid
+        (13, 0, 3, 0, 2, True, True),  # No Window AND no exogenous input
     ],
 )
 def test_basic_model(  # basic model referes to a non-mixture model
     batch_size,
     window_size,
-    input_symbols,
     feature_dim,
     exogenous_dim,
     extra_mixing_layers,
@@ -265,7 +264,6 @@ def test_basic_model(  # basic model referes to a non-mixture model
         with pytest.raises(ValueError):
             model = architecture.UnivariateModel(
                 window_size,
-                input_symbols,
                 exogenous_dimension=exogenous_dim,
                 feature_dimension=feature_dim,
                 extra_mixing_layers=extra_mixing_layers,
@@ -276,7 +274,6 @@ def test_basic_model(  # basic model referes to a non-mixture model
         # This is the base model we're testing.
         model = architecture.UnivariateModel(
             window_size,
-            input_symbols,
             exogenous_dimension=exogenous_dim,
             feature_dimension=feature_dim,
             extra_mixing_layers=extra_mixing_layers,
@@ -291,7 +288,7 @@ def test_basic_model(  # basic model referes to a non-mixture model
 
         # Create some test inputs.
         # 1) time series data:
-        ts_data = torch.randn((batch_size, input_symbols, window_size))
+        ts_data = torch.randn((batch_size, 1, window_size))
         # 2) exogenous data (here that comes from an embedding, but that's not
         # necessarily the case).)
         exogenous_data = (
@@ -325,11 +322,11 @@ def test_basic_model(  # basic model referes to a non-mixture model
             # Call embedding_model.forward()
             mu_e, sigma_inv_e, latents_e = embedding_model((ts_data, encoding))
 
-            assert mu_u.shape == (batch_size, input_symbols)
+            assert mu_u.shape == (batch_size, 1)
             assert sigma_inv_u.shape == (
                 batch_size,
-                input_symbols,
-                input_symbols,
+                1,
+                1,
             )
             assert latents_u.shape == (batch_size, feature_dim)
 
