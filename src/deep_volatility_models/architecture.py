@@ -408,6 +408,94 @@ def risk_neutral_drift(mu, sigma_inv):
     return (-0.5 * variance.squeeze(2)), sigma_inv
 
 
+class DeepVolatilityModel(torch.nn.Module):
+    """Generic class for different types of volatility models"""
+
+    def __init__(
+        self,
+        time_series_network: torch.nn.Module,
+        output_head_network: torch.nn.Module,
+        risk_neutral_adjustment: Union[torch.nn.Module, None],
+        sampler: Callable[[], torch.Tensor],
+        is_mixture: bool,
+    ):
+        super().__init__()
+
+        self.time_series_features = time_series_network
+        self.head = output_head_network
+        self.risk_neutral_adjustment = risk_neutral_adjustment
+        self.sampler = sampler
+        self.is_mixture = is_mixture
+
+    @property
+    def sampler(self):
+        return self.sampler
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
+
+    @property
+    def is_mixture(self) -> bool:
+        return self.is_mixture
+
+    @property
+    def window_size(self) -> int:
+        return self.time_series_features.window_size
+
+    def forward_unpacked(
+        self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
+    ):
+        """
+        Argument:
+           window: torch.Tensor of shape (minibatch_size, channels,
+           window_size)
+           exogenous: torch.Tensor to be mixed in or None
+        Returns:
+           For non-mixture models:
+               mu: torch.Tensor of shape (minibatch_size, symbols) - predicted mean of vector of symbol log returns
+               sigma_inv: (minibatch_size, output_symbols, input_symbols) - predicted inverse covariance of symbol log returns
+           For mixture models:
+               log_p: tourch.Tensor of shape (minibatch_size, components) - log_probability of each component
+               mu: torch.Tensor of shape (minibatch_size, components, symbols) - predicted mean components of vector of symbol log returns
+               sigma_inv: (minibatch_size, components, output_symbols, input_symbols) - predicted inverse covariance components of symbol log returns
+
+        """
+        # Get a "flat" latent feature vector for the series.
+        latents = self.time_series_features(window, exogenous)
+
+        # Process it further to get the desired outputs
+        head_output = self.head(latents)
+
+        # Return the desired outputs as well as the latents
+        return head_output + (latents,)
+
+    def forward(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+    ):
+        """This is a wrapper for the forward_unpacked() method.  It assumes that
+        `predictors` is a tuple of (time_series, embedding).  In the case that `predictors` is
+        not a tuple, it is assumed to be just the time_series portion.
+        """
+        # Allow this to work when passed a single tensor. In that case, assume the
+        # intent to be that there are no exogenous inputs.  Explicitly add then as None
+        # if missing
+        if not isinstance(predictors, tuple):
+            predictors = (predictors, None)
+
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
+
+        if hasattr(self, "risk_neutral") and self.risk_neutral_adjustment:
+            head_output = self.risk_neutral_adjustment(*head_output)
+
+        return head_output + (latents,)
+
+
 class UnivariateModel(torch.nn.Module):
     """Univariate model that's not a mixture model"""
 
