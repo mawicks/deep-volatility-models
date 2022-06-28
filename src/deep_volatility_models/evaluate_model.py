@@ -76,12 +76,11 @@ def simulate(model, symbol, window, current_price):
             len(historic_returns) + len(simulated_returns_many) - 1,
         )
     )
-    cum_historic_returns = np.cumsum(historic_returns)
-    plt.plot(current_price * np.exp(cum_historic_returns - cum_historic_returns[-1]))
+    plt.plot(current_price * historic_returns / historic_returns[-1])
     for _ in range(SIMULATIONS):
         plt.plot(
             sample_index,
-            current_price * np.exp(np.cumsum(simulated_returns_many[:, _])),
+            current_price * simulated_returns_many[:, _],
             "-.",
         )
 

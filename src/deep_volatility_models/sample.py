@@ -168,7 +168,7 @@ def simulate_one(
 
     Returns:
         torch.Tensor of shape (batch_size, symbols, time_samples+1) - For each batch row, a single time series
-        containing the simulated log returns.
+        containing the simulated returns.
 
     Notes:
         Last dimension of sample is sample_size+1 because the first
@@ -185,16 +185,18 @@ def simulate_one(
         make_predictors = lambda window, exogenous: window
 
     batch_size, symbols = window.shape[:2]
-    simulation = torch.zeros(batch_size, symbols, 1)
+    simulated_returns = torch.zeros(batch_size, symbols, 1)
 
     sampler = model.sampler
     for _ in range(time_samples):
         next_values = sampler(model, make_predictors(window, exogenous), 1)
         print("next_values: ", next_values)
         window = torch.cat([window[:, :, 1:], next_values], dim=2)
-        simulation = torch.cat((simulation, next_values), dim=2)
+        simulated_returns = torch.cat((simulated_returns, next_values), dim=2)
 
-    return simulation
+    # Aggregate the 'forward_days' future returns into the cumulative return
+    cumulative_returns = torch.exp(torch.cumsum(simulated_returns, dim=2)).detach()
+    return cumulative_returns
 
 
 def simulate_many(
@@ -228,8 +230,7 @@ def multivariate_mixture_simulate_extremes(
         mixture_model, window, time_samples, simulation_count
     )
 
-    cumsums = torch.cumsum(simulations, dim=3)
-    max_outcomes = torch.max(cumsums, dim=0)[0]
-    min_outcomes = torch.min(cumsums, dim=0)[0]
-    median_outcomes = torch.median(cumsums, dim=0)[0]
+    max_outcomes = torch.max(simulations, dim=0)[0]
+    min_outcomes = torch.min(simulations, dim=0)[0]
+    median_outcomes = torch.median(simulations, dim=0)[0]
     return min_outcomes, median_outcomes, max_outcomes
