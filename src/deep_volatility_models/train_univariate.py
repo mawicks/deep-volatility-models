@@ -32,18 +32,18 @@ DEFAULT_SEED = 24  # Previously 42
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
-USE_MIXTURE = True
+USE_MIXTURE = False
 RISK_NEUTRAL = True
-if RISK_NEUTRAL:
-    OPT_LEARNING_RATE = 0.000535
-    OPT_DROPOUT = 0.001675
-    OPT_FEATURE_DIMENSION = 41
-    OPT_MIXTURE_COMPONENTS = 4
+if RISK_NEUTRAL:  # These are the values for the univariate non-mixture model
+    OPT_LEARNING_RATE = 0.000712  # Previously 0.000535
+    OPT_DROPOUT = 0.009291  # Previously 0.001675
+    OPT_FEATURE_DIMENSION = 37  # Previously 41
+    OPT_MIXTURE_COMPONENTS = 1  # Previously 4
     OPT_WINDOW_SIZE = 256
-    OPT_EMBEDDING_DIMENSION = 4
-    OPT_MINIBATCH_SIZE = 124
-    OPT_GAUSSIAN_NOISE = 0.002789
-    OPT_WEIGHT_DECAY = 1.407138e-06
+    OPT_EMBEDDING_DIMENSION = 6  # Previously 4
+    OPT_MINIBATCH_SIZE = 230  # Previously 124
+    OPT_GAUSSIAN_NOISE = 0.000657  # Previosly 0.002789
+    OPT_WEIGHT_DECAY = 1.438462e-06  # Previously 1.407138e-06
     USE_BATCH_NORM = False  # risk neutral version has trouble with batch normalization
 else:
     # Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
@@ -98,7 +98,7 @@ def create_new_model(
             risk_neutral=risk_neutral,
         )
     else:
-        network -= architecture.UnivariateModel(
+        network = architecture.UnivariateModel(
             window_size,
             feature_dimension=feature_dimension,
             mixture_components=mixture_components,
