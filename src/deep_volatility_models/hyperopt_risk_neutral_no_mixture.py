@@ -100,6 +100,7 @@ search_space = {
     "weight_decay": hp.loguniform("weight_decay", np.log(5e-7), np.log(2e-6)),
     "window_size": hp.choice("window_size", [64, 256]),
     "use_batch_norm": hp.choice("use_batch_norm", [False]),
+    "use_mixture": hp.choice("use_mixture", [False]),
     "minibatch_size": 64 + hp.randint("minibatch_size", 193),
 }
 
