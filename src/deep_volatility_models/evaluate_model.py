@@ -66,7 +66,7 @@ def simulate(model, symbol, window, current_price):
 
     logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
 
-    historic_returns = window.squeeze(1).squeeze(0).numpy()
+    historic_returns = np.exp(np.cumsum(window.squeeze(1).squeeze(0).numpy()))
     simulated_returns_many = simulated_returns_many.squeeze(1).squeeze(0).numpy()
 
     logging.info(f"mean return: {np.mean(simulated_returns_many)}")
