@@ -35,8 +35,8 @@
 \begin{document}
 \begin{tikzpicture}
     [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
-     node distance=1.10cm and 1.10cm,
-     every edge quotes/.style={font=\small,auto=right},
+     node distance=1.0cm and 1.0cm,
+     every edge quotes/.style={font=\tiny,auto=right},
      every label/.style={font=\small,text width=1.5cm,align=center}
     ]
     \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] {};
@@ -56,12 +56,12 @@
     \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] [label=above:{\it ts-latent}] {}
         edge ["trans",{Latex}-] (latent)
         ;
-    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] {}
+    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] [label=above:{\it embedding}] {}
         ;
         
     \node (hidden1) at ($(flat latent)!0.5!(embedding)$) {}
         ;
-    \node[circle,fill,inner sep=1pt, outer sep=0pt] (aggregate) [right=0.6cm of hidden1] {}
+    \node[circle,fill,inner sep=1pt, outer sep=0pt] (aggregate) [right=0.75cm of hidden1] {}
         ;
     \draw (flat latent) -| (aggregate) ;
     \draw (embedding) -| (aggregate) ;
@@ -71,13 +71,13 @@
         edge ["fc1",{Latex}-] (aggregate)
         ;
         
-    \node[circle,fill,inner sep=1pt] (split) [right=0.5cm of latent2] {};
+    \node[circle,fill,inner sep=1pt] (split) [right=0.6cm of latent2] {};
         
-    \node (sigma) [right=3.125cm of flat latent]  {$\sigma$};
-    \node (mu) [right=3.125cm of embedding]  {$\mu$};
+    \node (sigma) [right=3.5cm of flat latent]  {$\sigma$};
+    \node (mu) [right=3.5cm of embedding]  {$\mu$};
 
-    \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {$\sigma$-head} (sigma) ;
-    \draw[-{Latex}] (split) |- node[near end,auto=left]  {$\mu$-head} (mu) ;
+    \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {\tiny $\sigma$-head} (sigma) ;
+    \draw[-{Latex}] (split) |- node[near end,auto=left]  {\tiny $\mu$-head} (mu) ;
     
    
   \end{tikzpicture}
