@@ -1,0 +1,83 @@
+\def\pgfsysdriver{pgfsys-dvipdfm.def} 
+\documentclass[dvipdfm,tikz]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{positioning}
+\usetikzlibrary{calc}
+\usetikzlibrary{quotes}
+\newdimen\cellsize\cellsize=6pt
+\tikzset{tensor/.style args={#1#2#3}{rectangle,draw=black!50,fill=#3!20,minimum width=#1,minimum height=#2,inner sep=0pt,%
+    path picture={\dimen0=#1\count0=\dimen0\divide\count0 by \cellsize
+                  \dimen1=#2\count1=\dimen1\divide\count1 by \cellsize
+                  \draw[black,very thin]
+                       (path picture bounding box.south west) \foreach \i in {1,...,\the\count0}{++(\the\cellsize,0pt) -- +(0pt, #2)}
+                       ;
+                  \draw[black,ultra thin] 
+                       (path picture bounding box.south west) \foreach \j in {1,...,\the\count1}{++(0pt,\the\cellsize) -- +(\the\dimen0, 0pt)}
+                       ;
+    }}}
+\tikzset{bigtensor/.style args={#1#2#3}{rectangle,draw=black!50,fill=#3!20,minimum width=#1,minimum height=#2,inner sep=0pt,%
+    path picture={\dimen0=#1\count0=\dimen1\divide\count0 by \cellsize
+                  \dimen1=#2\divide\dimen1 by 2\advance\dimen1 by -4pt\count1=\dimen1\divide\count1 by \cellsize
+                  \dimen2=\cellsize\multiply\dimen2 by \count1
+                  \draw[black,very thin]
+                       (path picture bounding box.south west) \foreach \i in {1,...,\the\count1}{++(0pt,\the\cellsize) -- +(#1,0pt)}
+                       (path picture bounding box.north west) \foreach \i in {1,...,\the\count1}{++(0pt,-\the\cellsize) -- +(#1,0pt)}
+                       ;
+                  \draw[black,ultra thin] 
+                       (path picture bounding box.south west) \foreach \j in {1,...,\the\count0}{++(\the\cellsize,0pt) -- +(0pt,\the\dimen2)}
+                       (path picture bounding box.north west) \foreach \j in {1,...,\the\count0}{++(\the\cellsize,0pt) -- +(0pt,-\the\dimen2)}
+                       ;
+                  \draw[black,very thin]
+                       (path picture bounding box) +(0pt,-2pt) [fill] circle[radius=0.3pt]  +(0,0) circle[radius=0.3pt] +(0pt,2pt) circle[fill,radius=0.3pt]                                     ;
+    }}}
+
+\begin{document}
+\begin{tikzpicture}
+    [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
+     node distance=1.25cm and 1.25cm,
+     every edge quotes/.style={font=\small,auto=right}
+    ]
+    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:{\small $256\times1$}] {};
+        ;
+    \node[bigtensor={12pt}{72pt}{blue}] (layer1) [right=of timeseriesinput] [label=below:{\small $64 \times n_f$}]{}
+        edge ["conv1",{Latex}-] (timeseriesinput)
+        ;
+    \node[bigtensor={12pt}{46pt}{blue}] (layer2) [right=of layer1] [label=below:{\small $16 \times n_f$}]{}
+        edge ["conv2",{Latex}-] (layer1)
+        ;
+    \node[tensor={12pt}{24pt}{blue}] (layer3) [right=of layer2] [label=below:{\small $4 \times n_f$}] {}
+        edge ["conv3",{Latex}-] (layer2)
+        ;
+    \node[tensor={12pt}{\the\cellsize}{blue}] (latent) [right=of layer3] [label=below:{\small $1 \times n_f$}] {}
+        edge ["conv4",{Latex}-] (layer3)
+        ;
+    \node[tensor={\the\cellsize}{12pt}{orange}] (flat latent) [right=of latent] [label=below:{\small $n_f \times 1$}] {}
+        edge ["transp",{Latex}-] (latent)
+        ;
+    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:{\small $n_e \times 1$}] {}
+        ;
+        
+    \node (hidden1) at ($(flat latent)!0.5!(embedding)$) {}
+        ;
+    \node[circle,fill,inner sep=1pt, outer sep=0pt] (aggregate) [right=0.5cm of hidden1] {}
+        ;
+    \draw[-{Latex}] (flat latent) -| (aggregate) ;
+    \draw[-{Latex}] (embedding) -| (aggregate) ;
+
+
+    \node[tensor={\the\cellsize}{12pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:{\small $n_f \times 1$}] {}
+        edge ["fc1",{Latex}-] (aggregate)
+        ;
+        
+    \node[circle,fill,inner sep=1pt] (split) [right=0.5cm of latent2] {};
+        
+    \node (sigma) [right=3.5cm of flat latent]  {$\sigma$};
+    \node (mu) [right=3.5cm of embedding]  {$\mu$};
+
+    \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {$\sigma$ head} (sigma) ;
+    \draw[-{Latex}] (split) |- node[near end,auto=left]  {$\mu$ head} (mu) ;
+    
+   
+  \end{tikzpicture}
+\end{document}
