@@ -48,7 +48,7 @@
      every edge quotes/.style={font=\tiny,auto=right},
      every label/.style={font=\tiny,text width=1.5cm,align=center}
     ]
-    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] {};
+    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] [label={[font=\small]above:{\it time series}}] {};
         ;
     \node[bigtensor={18pt}{72pt}{blue}] (layer1) [right=of timeseriesinput] [label=below:$64 \times n_f$]{}
         edge ["conv1",{Latex}-] (timeseriesinput)
