@@ -1,6 +1,15 @@
 \def\pgfsysdriver{pgfsys-dvipdfm.def} 
 \documentclass[dvipdfm,tikz]{standalone}
 \usepackage{tikz}
+%
+% \usepackage{xcharter-otf}
+% \usepackage[scaled=.98,sups,osf]{XCharter}% lining figures in math, osf in text
+\usepackage[scaled=.98,sups]{XCharter}% lining figures in math, osf in text
+\usepackage[scaled=1.04,varqu,varl]{inconsolata}% inconsolata typewriter
+\usepackage[type1]{cabin}% sans serif
+\usepackage[uprightscript,charter,vvarbb,scaled=1.05]{newtxmath}
+\linespread{1.04}
+%
 \usetikzlibrary{arrows.meta}
 \usetikzlibrary{positioning}
 \usetikzlibrary{calc}
