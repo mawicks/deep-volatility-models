@@ -1,0 +1,66 @@
+\def\pgfsysdriver{pgfsys-dvipdfm.def} 
+\documentclass[dvipdfm,tikz]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{positioning}
+\usetikzlibrary{calc}
+\newdimen\cellsize\cellsize=6pt
+\tikzset{tensor/.style args={#1#2}{rectangle,draw=blue!50,fill=blue!20,minimum width=#1,minimum height=#2,inner sep=0pt,%
+    path picture={\draw[xstep=\the\cellsize,ystep=0cm,black, very thin] (path picture bounding box.south west) grid (path picture bounding box.north east);}%
+    }}
+\tikzset{tensor2/.style args={#1#2}{rectangle,draw=blue!50,fill=blue!20,minimum width=#1,minimum height=#2,inner sep=0pt,%
+    path picture={\dimen0=#1\count0=\dimen0\divide\count0 by \cellsize
+                  \dimen1=#2\count1=\dimen1\divide\count1 by \cellsize
+                  \draw[black,ultra thin] 
+                       (path picture bounding box.south west) \foreach \j in {1,...,\the\count1}{++(0pt,\the\cellsize) -- +(\the\dimen0, 0pt)}
+                       ;
+                  \draw[black,very thin]
+                       (path picture bounding box.south west) \foreach \i in {1,...,\the\count0}{++(\the\cellsize,0pt) -- +(0pt, #2)}
+                       ;
+    }}}
+\tikzset{tensor3/.style args={#1#2}{rectangle,draw=blue!50,fill=blue!20,minimum width=#1,minimum height=#2,inner sep=0pt,%
+    path picture={\dimen0=#1\divide\dimen0 by 2\advance\dimen0 by -4pt\count0=\dimen0\divide\count0 by \cellsize
+                  \dimen1=#2\count1=\dimen1\divide\count1 by \cellsize
+                  \dimen2=\cellsize\multiply\dimen2 by \count0
+                  \draw[black,ultra thin] 
+                       (path picture bounding box.south west) \foreach \j in {1,...,\the\count1}{++(0pt,\the\cellsize) -- +(\the\dimen2, 0pt)}
+                       (path picture bounding box.south east) \foreach \j in {1,...,\the\count1}{++(0pt,\the\cellsize) -- +(-\the\dimen2, 0pt)}
+                       ;
+                  \draw[black,very thin]
+                       (path picture bounding box.south west) \foreach \i in {1,...,\the\count0}{++(\the\cellsize,0pt) -- +(0pt, #2)}
+                       (path picture bounding box.south east) \foreach \i in {1,...,\the\count0}{++(-\the\cellsize,0pt) -- +(0pt, #2)}
+                       ;
+                  \draw[black,very thin]
+                       (path picture bounding box) +(-2pt, 0pt) [fill] circle[radius=0.3pt]  +(0,0) circle[radius=0.3pt] +(2pt,0pt) circle[fill,radius=0.3pt]                                     ;
+    }}}
+
+\begin{document}
+\begin{tikzpicture}
+    [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm},
+     node distance=0.30cm
+    ]
+    \node[tensor3={256pt}{\the\cellsize},rotate=90] (timeseriesinput) [label=left:$1\times256$] {};
+    \node[block] (firstconvolution) [below=of timeseriesinput] {1D Conv}
+        edge [{Latex}-] (timeseriesinput)
+        ;
+    \node[tensor3={64pt}{18pt}] (firstlayeroutput) [below=of firstconvolution] [label=left:${\rm features}\times 64$]{}
+        edge [{Latex}-] (firstconvolution)
+        ;
+    \node[block] (secondconvolution) [below=of firstlayeroutput] {1D Conv}
+        edge [{Latex}-] (firstlayeroutput)
+        ;
+    \node[tensor2={\the\cellsize}{18pt}] (latent) [below=of secondconvolution] [label=left:${\rm features}\times 1$] {}
+        edge [{Latex}-] (secondconvolution)
+        ;
+    \node[tensor2={\the\cellsize}{24pt}] (embedding) [below=of latent] [label=left:${\rm embedding\ dimension}\times 1$] {}
+        ;
+    \node[circle,fill,inner sep=1pt,outer sep=0pt] (aggregate) at ($(latent)!0.5!(embedding)$) [right=0.35cm] {}
+        ;
+    \node[block] (mixing) [right=of aggregate] {FC}
+        ;
+
+    \draw[-{Latex}] (latent) -| (aggregate) -- (mixing) ;
+    \draw (embedding) -| (aggregate) ;
+   
+  \end{tikzpicture}
+\end{document}
