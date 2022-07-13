@@ -46,7 +46,7 @@
     [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
      node distance=1.0cm and 1.0cm,
      every edge quotes/.style={font=\tiny,auto=right},
-     every label/.style={font=\small,text width=1.5cm,align=center}
+     every label/.style={font=\tiny,text width=1.5cm,align=center}
     ]
     \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] {};
         ;
@@ -62,10 +62,10 @@
     \node[tensor={18pt}{\the\cellsize}{blue}] (latent) [right=of layer3] [label=below:$1 \times n_f$] {}
         edge ["conv4",{Latex}-] (layer3)
         ;
-    \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] [label=above:{\it ts-latent}] {}
+    \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] [label={[font=\small]above:{\it ts-latent}}] {}
         edge ["trans",{Latex}-] (latent)
         ;
-    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] [label=above:{\it embedding}] {}
+    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] [label={[font=\small]above:{\it embedding}}] {}
         ;
         
     \node (hidden1) at ($(flat latent)!0.5!(embedding)$) {}
@@ -76,7 +76,7 @@
     \draw (embedding) -| (aggregate) ;
 
 
-    \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.6cm of aggregate] [label=below:$n_f \times 1$] [label=above:{\it latent}] {}
+    \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.6cm of aggregate] [label=below:$n_f \times 1$] [label={[font=\small]above:{\it latent}}] {}
         edge ["fc1",{Latex}-] (aggregate)
         ;
         
