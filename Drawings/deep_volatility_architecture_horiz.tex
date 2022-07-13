@@ -37,7 +37,7 @@
     [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
      node distance=1.10cm and 1.10cm,
      every edge quotes/.style={font=\small,auto=right},
-     every label/.style={font=\small,text width=1cm,align=center}
+     every label/.style={font=\small,text width=1.25cm,align=center}
     ]
     \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] {};
         ;
@@ -67,7 +67,7 @@
     \draw[-{Latex}] (embedding) -| (aggregate) ;
 
 
-    \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:$n_f \times 1$] {}
+    \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:(latent)\\$n_f \times 1$] {}
         edge ["fc1",{Latex}-] (aggregate)
         ;
         
