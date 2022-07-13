@@ -63,8 +63,8 @@
         ;
     \node[circle,fill,inner sep=1pt, outer sep=0pt] (aggregate) [right=0.5cm of hidden1] {}
         ;
-    \draw[-{Latex}] (flat latent) -| (aggregate) ;
-    \draw[-{Latex}] (embedding) -| (aggregate) ;
+    \draw (flat latent) -| (aggregate) ;
+    \draw (embedding) -| (aggregate) ;
 
 
     \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:(latent)\\$n_f \times 1$] {}
