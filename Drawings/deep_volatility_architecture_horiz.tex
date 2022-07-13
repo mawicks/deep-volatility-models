@@ -35,27 +35,28 @@
 \begin{document}
 \begin{tikzpicture}
     [block/.style ={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
-     node distance=1.25cm and 1.25cm,
-     every edge quotes/.style={font=\small,auto=right}
+     node distance=1.10cm and 1.10cm,
+     every edge quotes/.style={font=\small,auto=right},
+     every label/.style={font=\small,text width=1cm,align=center}
     ]
-    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:{\small $256\times1$}] {};
+    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] {};
         ;
-    \node[bigtensor={12pt}{72pt}{blue}] (layer1) [right=of timeseriesinput] [label=below:{\small $64 \times n_f$}]{}
+    \node[bigtensor={18pt}{72pt}{blue}] (layer1) [right=of timeseriesinput] [label=below:$64 \times n_f$]{}
         edge ["conv1",{Latex}-] (timeseriesinput)
         ;
-    \node[bigtensor={12pt}{46pt}{blue}] (layer2) [right=of layer1] [label=below:{\small $16 \times n_f$}]{}
+    \node[bigtensor={18pt}{46pt}{blue}] (layer2) [right=of layer1] [label=below:$16 \times n_f$]{}
         edge ["conv2",{Latex}-] (layer1)
         ;
-    \node[tensor={12pt}{24pt}{blue}] (layer3) [right=of layer2] [label=below:{\small $4 \times n_f$}] {}
+    \node[tensor={18pt}{24pt}{blue}] (layer3) [right=of layer2] [label=below:$4 \times n_f$] {}
         edge ["conv3",{Latex}-] (layer2)
         ;
-    \node[tensor={12pt}{\the\cellsize}{blue}] (latent) [right=of layer3] [label=below:{\small $1 \times n_f$}] {}
+    \node[tensor={18pt}{\the\cellsize}{blue}] (latent) [right=of layer3] [label=below:$1 \times n_f$] {}
         edge ["conv4",{Latex}-] (layer3)
         ;
-    \node[tensor={\the\cellsize}{12pt}{orange}] (flat latent) [right=of latent] [label=below:{\small $n_f \times 1$}] {}
-        edge ["transp",{Latex}-] (latent)
+    \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] {}
+        edge ["trans",{Latex}-] (latent)
         ;
-    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:{\small $n_e \times 1$}] {}
+    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] {}
         ;
         
     \node (hidden1) at ($(flat latent)!0.5!(embedding)$) {}
@@ -66,17 +67,17 @@
     \draw[-{Latex}] (embedding) -| (aggregate) ;
 
 
-    \node[tensor={\the\cellsize}{12pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:{\small $n_f \times 1$}] {}
+    \node[tensor={\the\cellsize}{18pt}{red}] (latent2) [right=0.5cm of aggregate] [label=below:$n_f \times 1$] {}
         edge ["fc1",{Latex}-] (aggregate)
         ;
         
     \node[circle,fill,inner sep=1pt] (split) [right=0.5cm of latent2] {};
         
-    \node (sigma) [right=3.5cm of flat latent]  {$\sigma$};
-    \node (mu) [right=3.5cm of embedding]  {$\mu$};
+    \node (sigma) [right=3.25cm of flat latent]  {$\sigma$};
+    \node (mu) [right=3.25cm of embedding]  {$\mu$};
 
-    \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {$\sigma$ head} (sigma) ;
-    \draw[-{Latex}] (split) |- node[near end,auto=left]  {$\mu$ head} (mu) ;
+    \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {$\sigma$-head} (sigma) ;
+    \draw[-{Latex}] (split) |- node[near end,auto=left]  {$\mu$-head} (mu) ;
     
    
   \end{tikzpicture}
