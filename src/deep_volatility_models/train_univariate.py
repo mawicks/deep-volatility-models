@@ -189,6 +189,8 @@ def prepare_data(
     encoding: Dict[str, int],
     window_size: int,
     minibatch_size: int = OPT_MINIBATCH_SIZE,
+    start_date: Union[dt.date, None] = None,
+    end_date: Union[dt.date, None] = None,
 ):
     # Refresh historical data
     logging.info("Reading historical data")
@@ -216,7 +218,8 @@ def prepare_data(
         # but here we just load the single symbol of interest.  Since we expect
         # just one dataframe, grab it with next() instead of using a combiner()
         # (see stock-data.py).)
-        symbol_history = next(history_loader(s))[1]
+        symbol_history = next(history_loader(s))[1].loc[start_date:end_date]
+        logging.info(f"symbol_history:\n {symbol_history}")
 
         # Symbol history is a combined history for all symbols.  We process it
         # one symbols at a time, so get the log returns for the current symbol
@@ -228,6 +231,7 @@ def prepare_data(
             create_channel_dim=True,
         )
         logging.debug(f"{s} windowed_returns[0]: {windowed_returns[0]}")
+
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
@@ -400,6 +404,8 @@ def run(
     beta1=BETA1,
     beta2=BETA2,
     seed=DEFAULT_SEED,
+    start_date=None,
+    end_date=None,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -425,6 +431,8 @@ def run(
     logging.info(f"ADAM beta1: {beta1}")
     logging.info(f"ADAM beta2: {beta2}")
     logging.info(f"Seed: {seed}")
+    logging.info(f"Start date: {start_date}")
+    logging.info(f"End date: {end_date}")
 
     model_network = embeddings = None
     if existing_model:
@@ -461,6 +469,8 @@ def run(
         encoding,
         window_size,
         minibatch_size=minibatch_size,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     if model_network is None or embeddings is None:
@@ -615,6 +625,20 @@ def run(
 )
 @click.option("--weight-decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
 @click.option("--seed", default=DEFAULT_SEED, show_default=True, type=int)
+@click.option(
+    "--start-date",
+    default=None,
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Exclude training data (returns) before this date",
+)
+@click.option(
+    "--end-date",
+    default=str(dt.date.today()),
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Exclude training data on or after this date",
+)
 def main_cli(
     use_hsmd,
     model,
@@ -636,7 +660,16 @@ def main_cli(
     gaussian_noise,
     weight_decay,
     seed,
+    start_date,
+    end_date,
 ):
+
+    if start_date:
+        start_date = start_date.date()
+
+    if end_date:
+        end_date = end_date.date()
+
     run(
         use_hsmd,
         model_file=model,
@@ -658,6 +691,8 @@ def main_cli(
         gaussian_noise=gaussian_noise,
         weight_decay=weight_decay,
         seed=seed,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
