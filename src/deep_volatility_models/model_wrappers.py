@@ -1,6 +1,6 @@
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 
 import torch
 
@@ -13,3 +13,5 @@ class StockModel:
     epochs: int
     loss: float
     encoding: Dict[str, int] = field(default_factory=dict)
+    training_data_start_date: Union[dt.datetime, None] = None
+    training_data_end_date: Union[dt.datetime, None] = None

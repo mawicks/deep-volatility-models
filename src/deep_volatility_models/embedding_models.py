@@ -75,6 +75,8 @@ def SingleSymbolModelFactory(
             date=wrapped_model.date,
             epochs=wrapped_model.epochs,
             loss=wrapped_model.loss,
+            training_data_start_date=None,
+            training_data_end_date=None,
         )
 
     return single_symbol_model
