@@ -14,13 +14,14 @@ relu = torch.nn.ReLU()
 softplus = torch.nn.Softplus()
 sigmoid = torch.nn.Sigmoid()
 tanh = torch.nn.Tanh()
+selu = torch.nn.SELU()
 
 # Default values for Tuning parametrers
 DEFAULT_FEATURE_DIMENSION = 20  # May be overrideen by caller
 DEFAULT_MIXTURE_COMPONENTS = 4  # May be overridden by caller
 DEFAULT_GAUSSIAN_NOISE = 0.0025
 DEFAULT_DROPOUT_P = 0.125
-DEFAULT_ACTIVATION_FUNCTION = relu
+DEFAULT_ACTIVATION_FUNCTION = selu
 
 BATCH_NORM_EPS = 1e-4
 MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
@@ -124,7 +125,7 @@ class TimeSeriesFeatures(torch.nn.Module):
                 ),
                 batch_norm_factory_1d(feature_dimension, use_batch_norm),
                 activation,
-                torch.nn.Dropout2d(p=dropout),
+                torch.nn.Dropout1d(p=dropout),
             ]
 
         layers = []
@@ -149,7 +150,7 @@ class TimeSeriesFeatures(torch.nn.Module):
             # Should have one "pixel" with a depth of feature_dimension
 
             # Do one more mixing layer.
-            layers.extend(conv_block(feature_dimension, 1))
+            # layers.extend(conv_block(feature_dimension, 1))
 
         self.convolutional_layers = torch.nn.Sequential(*layers)
 
