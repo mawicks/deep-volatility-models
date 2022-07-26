@@ -24,7 +24,11 @@ from deep_volatility_models import model_wrappers
 from deep_volatility_models import architecture
 from deep_volatility_models import training
 
-logging.basicConfig(level=logging.INFO, force=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(message)s",
+    force=True,
+)
 
 TRAIN_FRACTION = 0.80
 DEFAULT_SEED = 24  # Previously 42
@@ -67,8 +71,11 @@ MAX_GRADIENT_NORM = 1.0
 
 if torch.cuda.is_available():
     dev = "cuda:0"
+# elif torch.has_mps:
+#     dev = "mps"
 else:
     dev = "cpu"
+
 device = torch.device(dev)
 
 
