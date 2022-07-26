@@ -58,7 +58,9 @@ def univariate_log_likelihood(
     z_squared = (sigma_inv * (x - mu)) ** 2
 
     # Inclusion of EPS is to ensure argument remains bounded away from zero.
-    log_sigma_inv = torch.log(EPS_FOR_LOG + torch.abs(sigma_inv))
+    log_sigma_inv = torch.log(
+        torch.maximum(torch.tensor(EPS_FOR_LOG), torch.abs(sigma_inv))
+    )
 
     # log_p, z_squared, and log_sigma_inv have the same shape: (mb_size, mixture_components)
 
