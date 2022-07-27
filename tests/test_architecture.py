@@ -71,6 +71,7 @@ def is_lower_triangular(m):
                         assert m[mb_i, mx_i, i, col_offset + j] != 0.0
 
 
+# TODO - Add test cases for risk_neutral=True
 @pytest.mark.parametrize(
     "batch_size, window_size, input_symbols, output_symbols, feature_dim,"
     "mixture_components, exogenous_dim, extra_mixing_layers,"
@@ -126,11 +127,12 @@ def test_mixture_model(
                 input_symbols,
                 output_symbols,
                 exogenous_dimension=exogenous_dim,
-                output_head_factory=architecture.MultivariateHead,
+                output_head_factory=architecture.MultivariateMixtureHead,
                 feature_dimension=feature_dim,
                 mixture_components=mixture_components,
                 extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
+                risk_neutral=False,
             )
     else:
         # This is the base mixture model we're testing.
@@ -139,11 +141,12 @@ def test_mixture_model(
             input_symbols,
             output_symbols,
             exogenous_dimension=exogenous_dim,
-            output_head_factory=architecture.MultivariateHead,
+            output_head_factory=architecture.MultivariateMixtureHead,
             feature_dimension=feature_dim,
             mixture_components=mixture_components,
             extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
+            risk_neutral=False,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
@@ -214,16 +217,141 @@ def test_mixture_model(
             assert window_size == mixture_model.window_size
 
 
+# TODO - Add test cases for risk_neutral=True
+@pytest.mark.parametrize(
+    "batch_size, window_size, feature_dim,"
+    "exogenous_dim, extra_mixing_layers,"
+    "use_batch_norm, expect_value_error",
+    [
+        (13, 0, 3, 7, 2, True, False),  # Window size of zero
+        (13, 4, 3, 7, 2, True, False),  # Chnage window size to 4
+        (13, 16, 3, 7, 2, True, False),  # Chnage window size to 16
+        (13, 64, 3, 7, 2, True, False),  # Change window size to 64
+        (13, 256, 3, 7, 2, True, False),  # Change window size to 256
+        (13, 64, 3, 0, 2, True, False),  # Without an exogenous input
+        (13, 64, 3, 7, 0, True, False),  # Without extra mixing layers
+        (13, 64, 3, 7, 2, False, False),  # Without batch norm
+        (13, 60, 3, 7, 2, True, True),  # Window size is not valid
+        (13, 0, 3, 0, 2, True, True),  # No Window AND no exogenous input
+    ],
+)
+def test_basic_model(  # basic model referes to a non-mixture model
+    batch_size,
+    window_size,
+    feature_dim,
+    exogenous_dim,
+    extra_mixing_layers,
+    use_batch_norm,
+    expect_value_error,
+):
+    """Test that a mmixture network can be created and evaluated
+    with different internal feature dimensions.  This is only a sanity check
+    that all of the dimensions conform and the network can produce output.
+    These are untrained networks so that's all we expect.  There is more
+    extensive validatation for unit tests of the individual head classes.  Here
+    we also check that the network executes properly with the training flag on
+    and off.
+
+    This code actually tests three things:
+    1) Does for the forward() method of the mixture network provide sane outputs
+    2) Does the forward_unpacked() method of the mixture netowrk provide sane
+    outputs
+    3) Does the forward() method of the ModelAndEmbedding work after combining
+    a mixture model with an embedding.
+
+    """
+    if expect_value_error:
+        with pytest.raises(ValueError):
+            model = architecture.UnivariateModel(
+                window_size,
+                exogenous_dimension=exogenous_dim,
+                feature_dimension=feature_dim,
+                extra_mixing_layers=extra_mixing_layers,
+                use_batch_norm=use_batch_norm,
+                risk_neutral=False,
+            )
+    else:
+        # This is the base model we're testing.
+        model = architecture.UnivariateModel(
+            window_size,
+            exogenous_dimension=exogenous_dim,
+            feature_dimension=feature_dim,
+            extra_mixing_layers=extra_mixing_layers,
+            use_batch_norm=use_batch_norm,
+            risk_neutral=False,
+        )
+        # Also create an embedding to test that ModelWithEmbedding returns sane results
+        embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
+
+        # Combing model with embedding in embedding_model
+        embedding_model = architecture.ModelWithEmbedding(model, embedding)
+
+        # Create some test inputs.
+        # 1) time series data:
+        ts_data = torch.randn((batch_size, 1, window_size))
+        # 2) exogenous data (here that comes from an embedding, but that's not
+        # necessarily the case).)
+        exogenous_data = (
+            torch.randn(batch_size, exogenous_dim) if exogenous_dim > 0 else None
+        )
+        # 3) an encoding vecto to tes with embedding_model
+        encoding = torch.randint(0, EMBEDDING_SYMBOLS, (batch_size,))
+
+        # Below we call the forward() methods of model and
+        # embedding_model and also the forward_unpacked() method of
+        # model and make sure they return tensors with the correct dimensions.
+
+        for train in (True, False):
+            model.train(train)
+            embedding_model.train(train)
+
+            # Call forward_unpacked()
+            mu_u, sigma_inv_u, latents_u = model.forward_unpacked(
+                ts_data,
+                exogenous_data,
+            )
+
+            # Call model.forward() with different variations
+            if exogenous_data is None:
+                mu, sigma_inv, latents = model(ts_data)
+            else:
+                mu, sigma_inv, latents = model(
+                    (ts_data, exogenous_data),
+                )
+
+            # Call embedding_model.forward()
+            mu_e, sigma_inv_e, latents_e = embedding_model((ts_data, encoding))
+
+            assert mu_u.shape == (batch_size, 1)
+            assert sigma_inv_u.shape == (
+                batch_size,
+                1,
+                1,
+            )
+            assert latents_u.shape == (batch_size, feature_dim)
+
+            assert mu.shape == mu_u.shape
+            assert sigma_inv.shape == sigma_inv_u.shape
+            assert latents.shape == latents_u.shape
+
+            assert mu.shape == mu_e.shape
+            assert sigma_inv.shape == sigma_inv_e.shape
+            assert latents.shape == latents_e.shape
+
+            # Confirm that the window_size property returns the correct size:
+            assert window_size == model.window_size
+
+
 @pytest.mark.parametrize(
     "head_class, batch_size, input_symbols, output_symbols, feature_dim,"
     "mixture_components, expect_value_error",
     [
-        (architecture.MultivariateHead, 13, 3, None, 5, 7, False),
-        (architecture.MultivariateHead, 13, 3, 3, 5, 7, False),
-        (architecture.MultivariateHead, 13, 3, 2, 5, 7, False),
-        (architecture.UnivariateHead, 13, 1, 1, 5, 7, False),
-        (architecture.UnivariateHead, 13, 3, None, 5, 7, True),
-        (architecture.UnivariateHead, 13, 3, 3, 5, 7, True),
+        (architecture.MultivariateMixtureHead, 13, 3, None, 5, 7, False),
+        (architecture.MultivariateMixtureHead, 13, 3, 3, 5, 7, False),
+        (architecture.MultivariateMixtureHead, 13, 3, 2, 5, 7, False),
+        (architecture.UnivariateMixtureHead, 13, 1, 1, 5, 7, False),
+        (architecture.UnivariateMixtureHead, 13, 3, None, 5, 7, True),
+        (architecture.UnivariateMixtureHead, 13, 3, 3, 5, 7, True),
     ],
 )
 def test_head_classes(

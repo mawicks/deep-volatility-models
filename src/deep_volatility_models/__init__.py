@@ -1,12 +1,14 @@
-from deep_volatility_models import architecture
-from deep_volatility_models import data_sources
-from deep_volatility_models import embedding_models
-from deep_volatility_models import mixture_model_stats
-from deep_volatility_models import model_wrappers
-from deep_volatility_models import models
-from deep_volatility_models import stats_utils
-from deep_volatility_models import evaluate_model
-from deep_volatility_models import time_series_datasets
-from deep_volatility_models import train_univariate
-from deep_volatility_models import training
-from deep_volatility_models import util
+from . import architecture
+from . import data_sources
+from . import embedding_models
+
+# from . import evaluate_model
+from . import mixture_model_stats
+from . import model_wrappers
+from . import models
+from . import sample
+from . import time_series_datasets
+
+# from . import train_univariate
+from . import training
+from . import util

@@ -132,29 +132,29 @@ def test_fail_on_inconsistent_dimensions():
 
 
 @pytest.mark.parametrize(
-    "p, mu, sigma_inv, expected_mean, expected_std_dev",
+    "p, mu, sigma_inv, expected_mean, expected_variance",
     [
         (
             [[1.0]],
             [[[2.0]]],
             [[[[0.25]]]],
             torch.tensor([2.0]),
-            torch.tensor([4.0]),
+            torch.tensor([16.0]),
         ),
         (
             [[0.75, 0.25]],
             [[[4.0], [8.0]]],
             [[[[0.25]], [[0.125]]]],
             torch.tensor([5.0]),
-            torch.tensor([math.sqrt(31.0)]),
+            torch.tensor([31.0]),
         ),
     ],
 )
-def test_univariate_combine_metrics(p, mu, sigma_inv, expected_mean, expected_std_dev):
-    mean, std_dev = mixture_model_stats.univariate_combine_metrics(p, mu, sigma_inv)
+def test_univariate_combine_metrics(p, mu, sigma_inv, expected_mean, expected_variance):
+    mean, variance = mixture_model_stats.univariate_combine_metrics(p, mu, sigma_inv)
     print(f"\nReturned mean:\n{mean}")
     print(f"Expected mean:\n{expected_mean}")
-    print(f"\nReturned std_dev:\n{std_dev}")
-    print(f"Expected std_dev:\n{expected_std_dev}")
+    print(f"\nReturned variance:\n{variance}")
+    print(f"Expected variance:\n{expected_variance}")
     assert mean == expected_mean
-    assert std_dev == expected_std_dev
+    assert variance == expected_variance

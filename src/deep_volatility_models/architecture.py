@@ -5,22 +5,29 @@ from typing import Any, Callable, Tuple, Union
 import torch
 import torch.nn
 
+# Local imports
+from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import sample
+
 # Instances of various activation functions for convenience
 relu = torch.nn.ReLU()
 softplus = torch.nn.Softplus()
 sigmoid = torch.nn.Sigmoid()
 tanh = torch.nn.Tanh()
+selu = torch.nn.SELU()
 
 # Default values for Tuning parametrers
 DEFAULT_FEATURE_DIMENSION = 20  # May be overrideen by caller
 DEFAULT_MIXTURE_COMPONENTS = 4  # May be overridden by caller
 DEFAULT_GAUSSIAN_NOISE = 0.0025
 DEFAULT_DROPOUT_P = 0.125
-DEFAULT_ACTIVATION_FUNCTION = relu
+DEFAULT_ACTIVATION_FUNCTION = selu
 
 BATCH_NORM_EPS = 1e-4
 MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
 SIGMA_INV_CLAMP = 1000.0
+
+RISK_NEUTRAL = "risk-neutral"
 
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
@@ -88,10 +95,6 @@ class TimeSeriesFeatures(torch.nn.Module):
     TODO
     """
 
-    @property
-    def window_size(self) -> int:
-        return int(self._window_size)
-
     def __init__(
         self,
         input_channels: int,
@@ -124,7 +127,7 @@ class TimeSeriesFeatures(torch.nn.Module):
                 ),
                 batch_norm_factory_1d(feature_dimension, use_batch_norm),
                 activation,
-                torch.nn.Dropout2d(p=dropout),
+                torch.nn.Dropout1d(p=dropout),
             ]
 
         layers = []
@@ -149,7 +152,7 @@ class TimeSeriesFeatures(torch.nn.Module):
             # Should have one "pixel" with a depth of feature_dimension
 
             # Do one more mixing layer.
-            layers.extend(conv_block(feature_dimension, 1))
+            # layers.extend(conv_block(feature_dimension, 1))
 
         self.convolutional_layers = torch.nn.Sequential(*layers)
 
@@ -181,6 +184,10 @@ class TimeSeriesFeatures(torch.nn.Module):
             )
 
         self.blend_exogenous = torch.nn.Sequential(*blend_exogenous_layers)
+
+    @property
+    def window_size(self) -> int:
+        return int(self._window_size)
 
     def forward(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -226,24 +233,66 @@ class TimeSeriesFeatures(torch.nn.Module):
 
 class UnivariateHead(torch.nn.Module):
     """
+    Univariate, non-mnixture head.
+    """
+
+    def __init__(
+        self,
+        feature_dimension: int,
+    ):
+        super().__init__()
+
+        # mu_head turns feature vector into a single mu estiamte.
+        self.mu_head = torch.nn.Linear(feature_dimension, 1)
+
+        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
+        self.sigma_inv_head = torch.nn.Linear(feature_dimension, 1)
+
+    def forward(self, latents: torch.Tensor):
+        """
+        Argument:
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
+        Returns:
+           mu: torch.Tensor of shape (minibatch_size, output_symbols=1)
+           sigma_inv: torch.Tensor of shape (minibatch_size, output_symbols=1, input_symbols=1)
+
+        """
+        mu = self.mu_head(latents)
+        sigma_inv = self.sigma_inv_head(latents)
+
+        # The unsqueeze() call is required to maintain dimensions that comform
+        # with the multivarate case.  In the multivate case, sigma_inv is a
+        # matrix (with row and colum dimensions equal to the number of symbols)
+
+        sigma_inv = sigma_inv.unsqueeze(2)
+
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
+
+        return mu, sigma_inv
+
+
+class UnivariateMixtureHead(torch.nn.Module):
+    """
     TODO
     """
 
     def __init__(
         self,
-        input_channels: int,
-        output_channels: Union[int, None],
+        input_symbols: int,
+        output_symbols: Union[int, None],
         feature_dimension: int,
         mixture_components: int,
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
+        if output_symbols is None:
+            output_symbols = input_symbols
 
-        if input_channels != 1 or output_channels != 1:
+        if input_symbols != 1 or output_symbols != 1:
             raise ValueError(
-                "UnivariateHead requires input_channels == output_channels == 1"
+                "UnivariateMixtureHead requires input_symbols == output_symbols == 1"
             )
 
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
@@ -269,30 +318,34 @@ class UnivariateHead(torch.nn.Module):
         mu = self.mu_head(latents).unsqueeze(2)
         sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
 
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
+
         return log_p, mu, sigma_inv
 
 
-class MultivariateHead(torch.nn.Module):
+class MultivariateMixtureHead(torch.nn.Module):
     """
     TODO
     """
 
     def __init__(
         self,
-        input_channels: int,
-        output_channels: Union[int, None],
+        input_symbols: int,
+        output_symbols: Union[int, None],
         feature_dimension: int,
         mixture_components: int,
     ):
         super().__init__()
 
-        if output_channels is None:
-            output_channels = input_channels
+        if output_symbols is None:
+            output_symbols = input_symbols
 
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
 
         self.mu_head = torch.nn.ConvTranspose1d(
-            feature_dimension, mixture_components, output_channels
+            feature_dimension, mixture_components, output_symbols
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
@@ -302,7 +355,7 @@ class MultivariateHead(torch.nn.Module):
         self.sigma_inv_head = torch.nn.ConvTranspose2d(
             feature_dimension,
             mixture_components,
-            (output_channels, input_channels),
+            (output_symbols, input_symbols),
         )
 
     def forward(self, latents: torch.Tensor):
@@ -332,28 +385,132 @@ class MultivariateHead(torch.nn.Module):
 
         # FIXME:  For compatibility with previously saved models
         # we get the shape from sigma_inv rather than from object state.
-        output_channels, input_channels = sigma_inv.shape[2:]
-        sigma_inv = torch.tril(sigma_inv, diagonal=(input_channels - output_channels))
+        output_symbols, input_symbols = sigma_inv.shape[2:]
+        sigma_inv = torch.tril(sigma_inv, diagonal=(input_symbols - output_symbols))
+
+        if not self.training:
+            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
+            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
 
         return log_p, mu, sigma_inv
 
 
-class MixtureModel(torch.nn.Module):
-    """ """
+def risk_neutral_drift(mu, sigma_inv):
+    if sigma_inv.shape[1] != 1 or sigma_inv.shape[2] != 1:
+        raise ValueError(
+            f"risk_neutral_drift() requires last two dimensions of sigma_inv to be 1, but shape is {sigma_inv.shape}"
+        )
+    if mu.shape[1] != 1:
+        raise ValueError(
+            f"risk_neutral_drift() requires last dimension of mu to be 1, but shape is {mu.shape}"
+        )
+    if mu.shape[0] != sigma_inv.shape[0]:
+        raise ValueError(
+            f"mu and sigma_inv need same number of rows but shapes are {mu.shape} and {sigma_inv.shape}"
+        )
+
+    variance = sigma_inv ** (-2)
+    return (-0.5 * variance.squeeze(2)), sigma_inv
+
+
+class DeepVolatilityModel(torch.nn.Module):
+    """Generic class for different types of volatility models"""
+
+    def __init__(
+        self,
+        time_series_network: torch.nn.Module,
+        output_head_network: torch.nn.Module,
+        risk_neutral_adjustment: Union[torch.nn.Module, None],
+        sampler: Callable[[], torch.Tensor],
+        is_mixture: bool,
+    ):
+        super().__init__()
+
+        self.time_series_features = time_series_network
+        self.head = output_head_network
+        self.risk_neutral_adjustment = risk_neutral_adjustment
+        self.sampler = sampler
+        self.is_mixture = is_mixture
+
+    @property
+    def sampler(self):
+        return self.sampler
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
+
+    @property
+    def is_mixture(self) -> bool:
+        return self.is_mixture
 
     @property
     def window_size(self) -> int:
         return self.time_series_features.window_size
 
+    def forward_unpacked(
+        self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
+    ):
+        """
+        Argument:
+           window: torch.Tensor of shape (minibatch_size, channels,
+           window_size)
+           exogenous: torch.Tensor to be mixed in or None
+        Returns:
+           For non-mixture models:
+               mu: torch.Tensor of shape (minibatch_size, symbols) - predicted mean of vector of symbol log returns
+               sigma_inv: (minibatch_size, output_symbols, input_symbols) - predicted inverse covariance of symbol log returns
+           For mixture models:
+               log_p: tourch.Tensor of shape (minibatch_size, components) - log_probability of each component
+               mu: torch.Tensor of shape (minibatch_size, components, symbols) - predicted mean components of vector of symbol log returns
+               sigma_inv: (minibatch_size, components, output_symbols, input_symbols) - predicted inverse covariance components of symbol log returns
+
+        """
+        # Get a "flat" latent feature vector for the series.
+        latents = self.time_series_features(window, exogenous)
+
+        # Process it further to get the desired outputs
+        head_output = self.head(latents)
+
+        # Return the desired outputs as well as the latents
+        return head_output + (latents,)
+
+    def forward(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+    ):
+        """This is a wrapper for the forward_unpacked() method.  It assumes that
+        `predictors` is a tuple of (time_series, embedding).  In the case that `predictors` is
+        not a tuple, it is assumed to be just the time_series portion.
+        """
+        # Allow this to work when passed a single tensor. In that case, assume the
+        # intent to be that there are no exogenous inputs.  Explicitly add then as None
+        # if missing
+        if not isinstance(predictors, tuple):
+            predictors = (predictors, None)
+
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
+
+        if hasattr(self, "risk_neutral") and self.risk_neutral_adjustment:
+            head_output = self.risk_neutral_adjustment(*head_output)
+
+        return head_output + (latents,)
+
+
+class UnivariateModel(torch.nn.Module):
+    """Univariate model that's not a mixture model"""
+
     def __init__(
         self,
         window_size: int,
-        input_channels: int,
-        output_channels: Union[int, None] = None,
         output_head_factory: Callable[
-            [int, Union[int, None], int, int], torch.nn.Module
-        ] = UnivariateHead,
-        mixture_components: int = DEFAULT_MIXTURE_COMPONENTS,
+            [int],
+            torch.nn.Module,
+        ] = UnivariateHead,  # head_factory parameter is feature_dimension
         feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
         exogenous_dimension: int = 0,
         extra_mixing_layers: int = 0,
@@ -361,11 +518,13 @@ class MixtureModel(torch.nn.Module):
         activation: torch.nn.Module = relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
+        mean_strategy=RISK_NEUTRAL,
+        mixture_components=None,  # FIXME: This parameter should be removed.
     ):
         super().__init__()
 
         self.time_series_features = TimeSeriesFeatures(
-            input_channels,
+            1,  # input symbols
             window_size,
             feature_dimension=feature_dimension,
             exogenous_dimension=exogenous_dimension,
@@ -377,11 +536,151 @@ class MixtureModel(torch.nn.Module):
         )
 
         self.head = output_head_factory(
-            input_channels,
-            output_channels,
+            feature_dimension,
+        )
+
+        if mean_strategy == RISK_NEUTRAL:
+            self.risk_neutral = True
+
+    @property
+    def sampler(self):
+        return sample.multivariate_sample
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
+
+    @property
+    def is_mixture(self) -> bool:
+        return False
+
+    @property
+    def window_size(self) -> int:
+        return self.time_series_features.window_size
+
+    def forward_unpacked(
+        self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
+    ):
+        """
+        Argument:
+           windowt: torch.Tensor of shape (minibatch_size, channels,
+           window_size)
+           exogenous: torch.Tensor to be mixed in or None
+        Returns:
+           mu: torch.Tensor of shape (minibatch_size, components, symbols=1)
+           sigma_inv: (minibatch_size, components, input_symbols=1, output_symbols=1)
+
+        """
+        # Get a "flat" feature vector for the series.
+        latents = self.time_series_features(window, exogenous)
+
+        head_output = self.head(latents)
+
+        return head_output + (latents,)
+
+    def forward(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+    ):
+        """This is a wrapper for the forward_unpacked() method.  It assumes that
+        data is a tuple of (time_series, embedding).  In the case that data is
+        not a tuple, it is assumed to be the time_series portion.
+        """
+        # Allow this to work when passed a tensor. In that case, assume the
+        # intent to be that there are no exogenous inputs.
+        if not isinstance(predictors, tuple):
+            predictors = (predictors, None)
+
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
+
+        if hasattr(self, "risk_neutral") and self.risk_neutral:
+            head_output = risk_neutral_drift(*head_output)
+
+        return head_output + (latents,)
+
+
+def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
+    p = torch.exp(log_p)
+    mu_c, var_c = mixture_model_stats.univariate_combine_metrics(p, mu, sigma_inv)
+    # log_mean_return is log of mean return as opposed to mean of log return.
+    log_mean_return = mu_c + 0.5 * var_c
+    log_mean_return = log_mean_return.unsqueeze(1).unsqueeze(2).expand(mu.shape)
+
+    return log_p, (mu - log_mean_return), sigma_inv
+
+
+class MixtureModel(torch.nn.Module):
+    """TODO"""
+
+    def __init__(
+        self,
+        window_size: int,
+        input_symbols: int,
+        output_symbols: Union[int, None] = None,
+        output_head_factory: Callable[
+            [int, Union[int, None], int, int], torch.nn.Module
+        ] = UnivariateMixtureHead,
+        mixture_components: int = DEFAULT_MIXTURE_COMPONENTS,
+        feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
+        exogenous_dimension: int = 0,
+        extra_mixing_layers: int = 0,
+        gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
+        activation: torch.nn.Module = relu,
+        dropout: float = DEFAULT_DROPOUT_P,
+        use_batch_norm: bool = True,
+        mean_strategy=RISK_NEUTRAL,
+    ):
+        super().__init__()
+
+        self.time_series_features = TimeSeriesFeatures(
+            input_symbols,
+            window_size,
+            feature_dimension=feature_dimension,
+            exogenous_dimension=exogenous_dimension,
+            extra_mixing_layers=extra_mixing_layers,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            activation=activation,
+            use_batch_norm=use_batch_norm,
+        )
+
+        self.head = output_head_factory(
+            input_symbols,
+            output_symbols,
             feature_dimension,
             mixture_components,
         )
+
+        if mean_strategy == RISK_NEUTRAL:
+            if input_symbols != 1 or output_symbols not in (1, None):
+                raise ValueError(
+                    f"Specifying risk_neutral is only possible with input_symbols == 1 and output_symbols in (1, None)"
+                    f"but input_symbosl={input_symbols} and output_symbols={output_symbols}"
+                )
+            self.risk_neutral = True
+
+    @property
+    def is_mixture(self) -> bool:
+        return True
+
+    @property
+    def window_size(self) -> int:
+        return self.time_series_features.window_size
+
+    @property
+    def sampler(self):
+        return sample.multivariate_mixture_sample
+
+    def simulate_one(
+        self,
+        predictors: Union[torch.Tensor, Tuple[torch.Tensor, Union[torch.Tensor, None]]],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(self, predictors, time_samples)
 
     def forward_unpacked(
         self, window: torch.Tensor, exogenous: Union[torch.Tensor, None] = None
@@ -405,10 +704,6 @@ class MixtureModel(torch.nn.Module):
 
         log_p, mu, sigma_inv = self.head(latents)
 
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
-
         return log_p, mu, sigma_inv, latents
 
     def forward(
@@ -424,12 +719,18 @@ class MixtureModel(torch.nn.Module):
         if not isinstance(predictors, tuple):
             predictors = (predictors, None)
 
-        return self.forward_unpacked(*predictors)
+        output = self.forward_unpacked(*predictors)
+        head_output, latents = output[:-1], output[-1]
+
+        if hasattr(self, "risk_neutral") and self.risk_neutral:
+            head_output = mixture_risk_neutral_adjustment(*head_output)
+
+        return head_output + (latents,)
 
 
 class ModelWithEmbedding(torch.nn.Module):
     """
-    This is a wrapper for a model.  The wrapper preprocesses an emcoding into an
+    This is a wrapper for a model.  The wrapper preprocesses an encoding into an
     embedding before calling the model.  This decouples the embedding from the
     training of the rest of the model.  The embedding can be replaced or
     retrained without changing anything in the model.  The caller is responsible
@@ -472,12 +773,31 @@ class ModelWithEmbedding(torch.nn.Module):
         self.model = model
         self.embedding = embedding
 
+    @property
+    def sampler(self):
+        return self.model.sample
+
+    def simulate_one(
+        self,
+        predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor],
+        time_samples: int,
+    ) -> torch.Tensor:
+        return sample.simulate_one(
+            self,
+            predictors_plus_encoding,
+            time_samples,
+        )
+
+    @property
+    def is_mixture(self):
+        return self.model.is_mixture
+
     def forward(
         self, predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor]
     ) -> Any:
         """
         Arguments:
-            predictors: Tuple[torch.Tensor, torch.Tensor] - The first position
+            predictors_plus_encoding: Tuple[torch.Tensor, torch.Tensor] - The first position
             of the tuple could be any predictor vector (though here it's
             typically a time series window) intended to be passed to
             convolutional layers in `self.model.`  The second position is an
@@ -488,6 +808,5 @@ class ModelWithEmbedding(torch.nn.Module):
 
         """
         predictors, encoding = predictors_plus_encoding
-
         embeddings = self.embedding(encoding)
         return self.model((predictors, embeddings))

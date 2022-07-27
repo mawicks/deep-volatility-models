@@ -15,15 +15,20 @@ import torch.utils.data
 import torch.utils.data.dataloader
 
 # Local imports
-import deep_volatility_models.data_sources as data_sources
-import deep_volatility_models.stock_data as stock_data
-import deep_volatility_models.mixture_model_stats as mixture_model_stats
-import deep_volatility_models.time_series_datasets as time_series_datasets
-import deep_volatility_models.model_wrappers as model_wrappers
-import deep_volatility_models.architecture as architecture
-import deep_volatility_models.training as training
+from deep_volatility_models import data_sources
+from deep_volatility_models import stock_data
+from deep_volatility_models import mixture_model_stats
+from deep_volatility_models import loss_functions
+from deep_volatility_models import time_series_datasets
+from deep_volatility_models import model_wrappers
+from deep_volatility_models import architecture
+from deep_volatility_models import training
 
-logging.basicConfig(level=logging.INFO, force=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s:%(message)s",
+    force=True,
+)
 
 TRAIN_FRACTION = 0.80
 DEFAULT_SEED = 24  # Previously 42
@@ -31,31 +36,47 @@ DEFAULT_SEED = 24  # Previously 42
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
-# Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
-OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
-OPT_DROPOUT = 0.130894  # Previously 0.50
-OPT_FEATURE_DIMENSION = 86  # Previously 40
-OPT_MIXTURE_COMPONENTS = 3  # Previously 4
-OPT_WINDOW_SIZE = 256  # Previously 64
-OPT_EMBEDDING_DIMENSION = 3  # Previously 10
-OPT_MINIBATCH_SIZE = 248  # Previously 75
-OPT_GAUSSIAN_NOISE = 0.000226  # Previously 0.0025
-OPT_WEIGHT_DECAY = 8.489603e-07  # Previously 5e-9
+USE_MIXTURE = False
+RISK_NEUTRAL = True
 
-
-# Following parameters haven't been optimized yet.
+if RISK_NEUTRAL:  # These are the values for the univariate non-mixture model
+    OPT_LEARNING_RATE = 0.000712  # Previously 0.000535
+    OPT_DROPOUT = 0.009291  # Previously 0.001675
+    OPT_FEATURE_DIMENSION = 37  # Previously 41
+    OPT_MIXTURE_COMPONENTS = 1  # Previously 4
+    OPT_WINDOW_SIZE = 256
+    OPT_EMBEDDING_DIMENSION = 6  # Previously 4
+    OPT_MINIBATCH_SIZE = 230  # Previously 124
+    OPT_GAUSSIAN_NOISE = 0.000657  # Previosly 0.002789
+    OPT_WEIGHT_DECAY = 1.438462e-06  # Previously 1.407138e-06
+    USE_BATCH_NORM = False  # risk neutral version has trouble with batch normalization
+else:
+    # Current values were optimized with hyperopt.  Values shown in comment were used before optimization.
+    OPT_LEARNING_RATE = 0.000689  # Previously 0.000375
+    OPT_DROPOUT = 0.130894  # Previously 0.50
+    OPT_FEATURE_DIMENSION = 86  # Previously 40
+    OPT_MIXTURE_COMPONENTS = 3  # Previously 4
+    OPT_WINDOW_SIZE = 256  # Previously 64
+    OPT_EMBEDDING_DIMENSION = 3  # Previously 10
+    OPT_MINIBATCH_SIZE = 248  # Previously 75
+    OPT_GAUSSIAN_NOISE = 0.000226  # Previously 0.0025
+    OPT_WEIGHT_DECAY = 8.489603e-07  # Previously 5e-9
+    # Value of USE_BATCH_NORM wasn't optimized with hyperopt but was set to True.
+    USE_BATCH_NORM = True
 
 BETA1 = 0.95
 BETA2 = 0.999
 ADAM_EPSILON = 1e-8
-USE_BATCH_NORM = True
 ACTIVATION = torch.nn.ReLU()
 MAX_GRADIENT_NORM = 1.0
 
 if torch.cuda.is_available():
     dev = "cuda:0"
+# elif torch.has_mps:
+#     dev = "mps"
 else:
     dev = "cpu"
+
 device = torch.device(dev)
 
 
@@ -68,20 +89,35 @@ def create_new_model(
     gaussian_noise=OPT_GAUSSIAN_NOISE,
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
+    mean_strategy="risk-neutral",
+    use_mixture=USE_MIXTURE,
 ):
-    default_network_class = architecture.MixtureModel
+    if use_mixture:
+        network = architecture.MixtureModel(
+            window_size,
+            1,
+            feature_dimension=feature_dimension,
+            mixture_components=mixture_components,
+            exogenous_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+            activation=ACTIVATION,
+            mean_strategy=mean_strategy,
+        )
+    else:
+        network = architecture.UnivariateModel(
+            window_size,
+            feature_dimension=feature_dimension,
+            mixture_components=mixture_components,
+            exogenous_dimension=embedding_dimension,
+            gaussian_noise=gaussian_noise,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+            activation=ACTIVATION,
+            mean_strategy=mean_strategy,
+        )
 
-    network = default_network_class(
-        window_size,
-        1,
-        feature_dimension=feature_dimension,
-        mixture_components=mixture_components,
-        exogenous_dimension=embedding_dimension,
-        gaussian_noise=gaussian_noise,
-        dropout=dropout,
-        use_batch_norm=use_batch_norm,
-        activation=ACTIVATION,
-    )
     embedding = torch.nn.Embedding(embedding_size, embedding_dimension)
 
     return network, embedding
@@ -154,6 +190,8 @@ def prepare_data(
     encoding: Dict[str, int],
     window_size: int,
     minibatch_size: int = OPT_MINIBATCH_SIZE,
+    start_date: Union[dt.date, None] = None,
+    end_date: Union[dt.date, None] = None,
 ):
     # Refresh historical data
     logging.info("Reading historical data")
@@ -174,13 +212,15 @@ def prepare_data(
     skip = 256 - window_size
 
     for s in symbol_list:
+        logging.info(f"Reading {s}")
         i = encoding[s]
 
         # history_loader can load many symbols at once for multivariate
         # but here we just load the single symbol of interest.  Since we expect
         # just one dataframe, grab it with next() instead of using a combiner()
         # (see stock-data.py).)
-        symbol_history = next(history_loader(s))[1]
+        symbol_history = next(history_loader(s))[1].loc[start_date:end_date]
+        logging.info(f"symbol_history:\n {symbol_history}")
 
         # Symbol history is a combined history for all symbols.  We process it
         # one symbols at a time, so get the log returns for the current symbol
@@ -192,6 +232,7 @@ def prepare_data(
             create_channel_dim=True,
         )
         logging.debug(f"{s} windowed_returns[0]: {windowed_returns[0]}")
+
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
@@ -229,7 +270,7 @@ def prepare_data(
     return train_dataloader, validation_dataloader
 
 
-def make_loss_function():
+def make_mixture_loss_function():
     def loss_function(output, target):
         log_p, mu, inv_sigma = output[:3]
 
@@ -249,7 +290,24 @@ def make_loss_function():
     return loss_function
 
 
-def log_mean_error(epoch, output, target):
+def make_loss_function():
+    def loss_function(output, target):
+        mu, inv_sigma = output[:2]
+
+        loss = -torch.mean(
+            loss_functions.univariate_log_likelihood(target.squeeze(2), mu, inv_sigma)
+        )
+
+        if np.isnan(float(loss)):
+            logging.error("mu: ", mu)
+            logging.error("inv_sigma: ", inv_sigma)
+
+        return loss
+
+    return loss_function
+
+
+def log_mixture_mean_error(epoch, output, target):
     log_p, mu = output[:2]
     mb_size, components, channels = mu.shape
     combined_mu = torch.sum(
@@ -260,10 +318,27 @@ def log_mean_error(epoch, output, target):
     logging.debug(f"epoch: {epoch} mean_error: {float(mean_error):.5f}")
 
 
-def make_validation_batch_logger():
+def make_mixture_validation_batch_logger():
     def log_epoch(epoch, batch, output, target, loss):
         log_p, mu, inv_sigma = output[:3]
         logging.debug(f"last epoch p:\n{torch.exp(log_p)[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
+        logging.debug(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
+
+        log_mixture_mean_error(epoch, output, target)
+
+    return log_epoch
+
+
+def log_mean_error(epoch, output, target):
+    mu = output[0]
+    mean_error = torch.mean(target.squeeze(2) - mu, dim=0)
+    logging.debug(f"epoch: {epoch} mean_error: {float(mean_error):.5f}")
+
+
+def make_validation_batch_logger():
+    def log_epoch(epoch, batch, output, target, loss):
+        mu, inv_sigma = output[:2]
         logging.debug(f"last epoch mu:\n{mu[:6].detach().cpu().numpy()}")
         logging.debug(f"last epoch sigma:\n{inv_sigma[:6].detach().cpu().numpy()}")
 
@@ -307,11 +382,16 @@ def make_epoch_callback(model):
 
 
 def run(
+    use_hsmd,
     model_file,
     existing_model,
     symbols,
     refresh,
+    mean_strategy,
     only_embeddings,
+    use_mixture=USE_MIXTURE,
+    max_epochs=EPOCHS,
+    early_termination=EARLY_TERMINATION,
     window_size=OPT_WINDOW_SIZE,
     mixture_components=OPT_MIXTURE_COMPONENTS,
     feature_dimension=OPT_FEATURE_DIMENSION,
@@ -322,11 +402,11 @@ def run(
     learning_rate=OPT_LEARNING_RATE,
     weight_decay=OPT_WEIGHT_DECAY,
     use_batch_norm=USE_BATCH_NORM,
-    max_epochs=EPOCHS,
-    early_termination=EARLY_TERMINATION,
     beta1=BETA1,
     beta2=BETA2,
     seed=DEFAULT_SEED,
+    start_date=None,
+    end_date=None,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -336,6 +416,9 @@ def run(
     logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
+    logging.info(f"mean_strategy: {mean_strategy}")
+    logging.info(f"only_embeddings: {only_embeddings}")
+    logging.info(f"use_mixture: {use_mixture}")
     logging.info(f"window_size: {window_size}")
     logging.info(f"mixture_components: {mixture_components}")
     logging.info(f"feature_dimension: {feature_dimension}")
@@ -349,6 +432,8 @@ def run(
     logging.info(f"ADAM beta1: {beta1}")
     logging.info(f"ADAM beta2: {beta2}")
     logging.info(f"Seed: {seed}")
+    logging.info(f"Start date: {start_date}")
+    logging.info(f"End date: {end_date}")
 
     model_network = embeddings = None
     if existing_model:
@@ -362,7 +447,11 @@ def run(
     logging.info(f"Encoding: {encoding}")
 
     data_store = stock_data.FileSystemStore("training_data")
-    data_source = data_sources.YFinanceSource()
+    if use_hsmd:
+        data_source = data_sources.HugeStockMarketDatasetSource(use_hsmd)
+    else:
+        data_source = data_sources.YFinanceSource()
+
     history_loader = stock_data.CachingSymbolHistoryLoader(
         data_source, data_store, refresh
     )
@@ -371,7 +460,7 @@ def run(
 
     # Do split before any random weight initialization so that any
     # subsequent random number generator calls won't affect the split.
-    # We want the splits to be the same for different architecutre
+    # We want the splits to be the same for different architecture
     # parameters to provide fair comparisons of different
     # architectures on the same split.
 
@@ -381,6 +470,8 @@ def run(
         encoding,
         window_size,
         minibatch_size=minibatch_size,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     if model_network is None or embeddings is None:
@@ -391,8 +482,10 @@ def run(
             feature_dimension=feature_dimension,
             embedding_dimension=embedding_dimension,
             gaussian_noise=gaussian_noise,
+            use_mixture=use_mixture,
             use_batch_norm=use_batch_norm,
             dropout=dropout,
+            mean_strategy=mean_strategy,
         )
         logging.info("Initialized new model")
 
@@ -418,8 +511,13 @@ def run(
         eps=ADAM_EPSILON,
     )
 
-    loss_function = make_loss_function()
-    validation_batch_callback = make_validation_batch_logger()
+    if use_mixture:
+        loss_function = make_mixture_loss_function()
+        validation_batch_callback = make_mixture_validation_batch_logger()
+    else:
+        loss_function = make_loss_function()
+        validation_batch_callback = make_validation_batch_logger()
+
     epoch_callback = make_epoch_callback(model)
     loss_improvement_callback = make_loss_improvement_callback(
         model_file, only_embeddings, model, encoding, symbols
@@ -445,13 +543,19 @@ def run(
 
 @click.command()
 @click.option(
+    "--use-hsmd",
+    default=None,
+    show_default=True,
+    help="Use huge stock market dataset if specified zip file (else use yfinance)",
+)
+@click.option(
     "--model",
     default="model.pt",
     show_default=True,
     help="Trained model output file.",
 )
 @click.option(
-    "--existing_model",
+    "--existing-model",
     default=None,
     show_default=True,
     help="Existing model to load (for tuning).",
@@ -465,45 +569,90 @@ def run(
     help="Refresh stock data",
 )
 @click.option(
-    "--only_embeddings",
+    "--mean-strategy",
+    type=click.Choice(["risk-neutral", "zero", "estimate"]),
+    show_default=True,
+    default="risk-neutral",
+    help="Method to use for mean output.",
+)
+@click.option(
+    "--only-embeddings",
     is_flag=True,
     default=False,
     show_default=True,
     help="Train only the embeddings",
 )
 @click.option(
-    "--learning_rate", default=OPT_LEARNING_RATE, show_default=True, type=float
+    "--use-mixture/--no-mixture",
+    is_flag=True,
+    default=USE_MIXTURE,
+    show_default=True,
+    help="Use a mixture model?",
+)
+@click.option(
+    "--early-termination",
+    default=EARLY_TERMINATION,
+    show_default=True,
+    help="Terminate if no improvement in this number of iterations",
+)
+@click.option(
+    "--learning-rate", default=OPT_LEARNING_RATE, show_default=True, type=float
 )
 @click.option("--dropout", default=OPT_DROPOUT, show_default=True, type=float)
 @click.option(
-    "--feature_dimension", default=OPT_FEATURE_DIMENSION, show_default=True, type=int
+    "--use-batch-norm/--no-use-batch-norm",
+    is_flag=True,
+    default=USE_BATCH_NORM,
+    show_default=True,
 )
 @click.option(
-    "--mixture_components", default=OPT_MIXTURE_COMPONENTS, show_default=True, type=int
+    "--feature-dimension", default=OPT_FEATURE_DIMENSION, show_default=True, type=int
 )
-@click.option("--window_size", default=OPT_WINDOW_SIZE, show_default=True, type=int)
 @click.option(
-    "--embedding_dimension",
+    "--mixture-components", default=OPT_MIXTURE_COMPONENTS, show_default=True, type=int
+)
+@click.option("--window-size", default=OPT_WINDOW_SIZE, show_default=True, type=int)
+@click.option(
+    "--embedding-dimension",
     default=OPT_EMBEDDING_DIMENSION,
     show_default=True,
     type=int,
 )
 @click.option(
-    "--minibatch_size", default=OPT_MINIBATCH_SIZE, show_default=True, type=int
+    "--minibatch-size", default=OPT_MINIBATCH_SIZE, show_default=True, type=int
 )
 @click.option(
-    "--gaussian_noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
+    "--gaussian-noise", default=OPT_GAUSSIAN_NOISE, show_default=True, type=float
 )
-@click.option("--weight_decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
+@click.option("--weight-decay", default=OPT_WEIGHT_DECAY, show_default=True, type=float)
 @click.option("--seed", default=DEFAULT_SEED, show_default=True, type=int)
+@click.option(
+    "--start-date",
+    default=None,
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Exclude training data (returns) before this date",
+)
+@click.option(
+    "--end-date",
+    default=str(dt.date.today()),
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Exclude training data on or after this date",
+)
 def main_cli(
+    use_hsmd,
     model,
     existing_model,
     symbol,
     refresh,
+    mean_strategy,
     only_embeddings,
+    use_mixture,
+    early_termination,
     learning_rate,
     dropout,
+    use_batch_norm,
     feature_dimension,
     mixture_components,
     window_size,
@@ -512,15 +661,29 @@ def main_cli(
     gaussian_noise,
     weight_decay,
     seed,
+    start_date,
+    end_date,
 ):
+
+    if start_date:
+        start_date = start_date.date()
+
+    if end_date:
+        end_date = end_date.date()
+
     run(
+        use_hsmd,
         model_file=model,
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
+        mean_strategy=mean_strategy,
+        use_mixture=use_mixture,
         only_embeddings=only_embeddings,
+        early_termination=early_termination,
         learning_rate=learning_rate,
         dropout=dropout,
+        use_batch_norm=use_batch_norm,
         feature_dimension=feature_dimension,
         mixture_components=mixture_components,
         window_size=window_size,
@@ -529,6 +692,8 @@ def main_cli(
         gaussian_noise=gaussian_noise,
         weight_decay=weight_decay,
         seed=seed,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 

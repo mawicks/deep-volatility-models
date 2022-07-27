@@ -114,7 +114,7 @@ def multivariate_log_likelihood(
     z = torch.matmul(sigma_inv, e)
     # z is (mb_size, mixture_components, channels, 1)
 
-    z_squared = torch.sum((z ** 2).squeeze(3), dim=2)
+    z_squared = torch.sum((z**2).squeeze(3), dim=2)
     # z_squared is (mb_size, mixture_components)
 
     # print('x: ', x)
@@ -163,8 +163,8 @@ def univariate_combine_metrics(p, mu, sigma_inv):
 
     Outputs:
         mu: tensor of shape (mb_size,) containing the expected mean
-        std_dev: tensor of shape (mb_size, 1, 1) containing the
-            stanrdard deviation of the mixture.
+        variance: tensor of shape (mb_size,) containing the
+            variance of the mixture.
 
         Note tha the return value is the standard deviation and *not* the inverse
         of the standard deviation.
@@ -193,12 +193,11 @@ def univariate_combine_metrics(p, mu, sigma_inv):
 
     variance = (1.0 / sigma_inv) ** 2
     composite_mean = torch.sum(p * mu, dim=1)
-    print(f"composite_mean: {composite_mean}")
 
     # TODO: Verify this is correct implementation of parallel axis theorem
     # E[(x-mu)**2] = sum p_i E[(x_i-mu)**2]
     # E[(x_i-mu)**2] = E[((x_i-mu_i) + (mu_i-mu))**2]
     #                = sigma_i**2 + (mu_i-mu)**2
     shifted_component_variances = variance + (mu - composite_mean.unsqueeze(1)) ** 2
-    composite_std_dev = torch.sqrt(torch.sum(p * shifted_component_variances, dim=1))
-    return composite_mean, composite_std_dev
+    composite_variance = torch.sum(p * shifted_component_variances, dim=1)
+    return composite_mean, composite_variance

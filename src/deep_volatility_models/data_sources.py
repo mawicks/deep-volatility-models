@@ -1,6 +1,7 @@
 import logging
 
 from typing import Callable, Dict, Iterable, Union
+import zipfile
 
 # Third party modules
 import numpy as np
@@ -15,10 +16,10 @@ logging.basicConfig(level=logging.INFO)
 DataSource = Callable[[Union[str, Iterable[str]]], Dict[str, pd.DataFrame]]
 
 
-def YFinanceSource():
+def YFinanceSource() -> DataSource:
     """
-    xxx
-    >>> import data_sources
+    Sample usage:
+    >>> from deep_volatility_models import data_sources
     >>> symbols = ["SPY", "QQQ"]
     >>> ds = data_sources.YFinanceSource()
     >>> response = ds(symbols)
@@ -63,6 +64,57 @@ def YFinanceSource():
             response[symbol] = (
                 _add_columns(symbol_df).dropna().applymap(lambda x: round(x, 6))
             )
+
+        return response
+
+    return price_history
+
+
+def HugeStockMarketDatasetSource(zip_filename) -> DataSource:
+    """
+    Sample usage
+    >>> from deep_volatility_models import data_sources
+    >>> symbols = ["SPY", "QQQ"]
+    >>> ds = data_sources.HugeStockMarketDatasetSource('archive.zip')
+    >>> response = ds(symbols)
+    """
+
+    def _add_columns(df):
+        new_df = df.dropna().reset_index()
+        rename_dict = {c: util.rename_column(c) for c in new_df.columns}
+        new_df.rename(columns=rename_dict, inplace=True)
+
+        log_return = np.log(new_df["close"] / new_df["close"].shift(1))
+        new_df = new_df.assign(log_return=log_return)
+
+        new_df.set_index("date", inplace=True)
+        return new_df
+
+    def price_history(symbol_set: Union[Iterable[str], str]) -> Dict[str, pd.DataFrame]:
+
+        # Convert symbol_set to a list
+        symbols = util.to_symbol_list(symbol_set)
+        response = {}
+
+        with zipfile.ZipFile(zip_filename, "r") as open_zipfile:
+            for symbol in symbols:
+                found = False
+                for prefix in ["Data/Stocks", "Data/ETFs"]:
+                    try:
+                        name = f"{prefix}/{symbol.lower()}.us.txt"
+                        symbol_df = pd.read_csv(open_zipfile.open(name))
+                        response[symbol] = (
+                            _add_columns(symbol_df)
+                            .dropna()
+                            .applymap(lambda x: round(x, 6))
+                        )
+                        found = True
+                    except KeyError:
+                        pass
+                if not found:
+                    raise ValueError(
+                        f"Symbol {symbol} not found in Huge Stock Market Dataset"
+                    )
 
         return response
 
