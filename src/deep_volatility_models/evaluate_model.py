@@ -316,9 +316,8 @@ def run_cli(
 
     if start_date:
         start_date = start_date.date()
-        df = df.loc[start_date:end_date]
-    else:
-        df = df.loc[:end_date]
+
+    df = df.loc[start_date:end_date]
 
     logging.info(df)
     df.plot(subplots=True)
