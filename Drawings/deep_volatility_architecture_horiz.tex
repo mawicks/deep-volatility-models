@@ -1,5 +1,6 @@
 \def\pgfsysdriver{pgfsys-dvipdfm.def} 
-\documentclass[dvipdfm,tikz]{standalone}
+\documentclass[dvipdfm,tikz,12pt]{standalone}
+% \documentclass[dvips,tikz,12pt,convert={true,density=1200}]{standalone}
 \usepackage{tikz}
 %
 % \usepackage{xcharter-otf}
@@ -45,11 +46,12 @@
 \begin{tikzpicture}
     [block/.style={rectangle,draw=red!50,fill=red!20,minimum size=4mm,align=center},
      connection/.style={circle,fill,inner sep=1pt,outer sep=0pt},
-     node distance=1.0cm and 1.0cm,
+     node distance=1.70cm and 0.95cm,
      every edge quotes/.style={font=\tiny,auto=right},
-     every label/.style={font=\tiny,text width=1.5cm,align=center}
+     every label/.style={font=\tiny,text width=1.75cm,align=center}
     ]
-    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$] [label={[font=\small]above:{\it time series}}] {};
+    \node[bigtensor={\the\cellsize}{124pt}{green},fill=green!20] (timeseriesinput) [label=below:$256\times1$\\ ($x_{n-256} \hbox{ \it to } x_{n-1}$)]
+          [label={[font=\small]above:{\it time series}}] {};
         ;
     \node[bigtensor={18pt}{72pt}{blue}] (layer1) [right=of timeseriesinput] [label=below:$64 \times n_f$]{}
         edge ["conv1",{Latex}-] (timeseriesinput)
@@ -63,15 +65,16 @@
     \node[tensor={18pt}{\the\cellsize}{blue}] (latent) [right=of layer3] [label=below:$1 \times n_f$] {}
         edge ["conv4",{Latex}-] (layer3)
         ;
-    \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] [label={[font=\small]above:{\it ts-latent}}] {}
-        edge ["trans",{Latex}-] (latent)
+    \node[tensor={\the\cellsize}{18pt}{orange}] (flat latent) [right=of latent] [label=below:$n_f \times 1$] [label={[font=\small]above:{\it ts latent}}] {}
+        edge ["transpose",{Latex}-] (latent)
         ;
-    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent] [label=below:$n_e \times 1$] [label={[font=\small]above:{\it embedding}}] {}
+    \node[tensor={\the\cellsize}{24pt}{green}] (embedding) [below=of flat latent]
+    [label=below:$n_e \times 1$] [label={[font=\small,text depth=0pt]above:\parbox[b]{1.75cm}{\centering \it stock\\[-0.8ex]embedding}}] {}
         ;
         
     \node (hidden1) at ($(flat latent)!0.5!(embedding)$) {}
         ;
-    \node[connection] (aggregate) [right=0.75cm of hidden1] {}
+    \node[connection] (aggregate) [right=0.85cm of hidden1] {}
         ;
     \draw (flat latent) -| (aggregate) ;
     \draw (embedding) -| (aggregate) ;
@@ -83,8 +86,8 @@
         
     \node[connection] (split) [right=0.6cm of latent2] {};
         
-    \node (sigma) [right=3.4cm of flat latent]  {$\sigma$};
-    \node (mu) [right=3.4cm of embedding]  {$\mu$};
+    \node (sigma) [right=3.4cm of flat latent]  {$\sigma_n$};
+    \node (mu) [right=3.4cm of embedding]  {$\mu_n$};
 
     \draw[-{Latex}] (latent2) -- (split) |- node[near end,auto=left]  {\tiny $\sigma$-head} (sigma) ;
     \draw[-{Latex}] (split) |- node[near end,auto=left]  {\tiny $\mu$-head} (mu) ;
