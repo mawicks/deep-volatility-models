@@ -190,7 +190,6 @@ def simulate_one(
     sampler = model.sampler
     for _ in range(time_samples):
         next_values = sampler(model, make_predictors(window, exogenous), 1)
-        print("next_values: ", next_values)
         window = torch.cat([window[:, :, 1:], next_values], dim=2)
         simulated_returns = torch.cat((simulated_returns, next_values), dim=2)
 
