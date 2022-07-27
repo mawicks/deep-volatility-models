@@ -24,8 +24,8 @@ DEFAULT_DROPOUT_P = 0.125
 DEFAULT_ACTIVATION_FUNCTION = selu
 
 BATCH_NORM_EPS = 1e-4
-MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
-SIGMA_INV_CLAMP = 1000.0
+MIXTURE_MU_CLAMP = 10.00  # Clamp will be +/- this value
+SIGMA_INV_CLAMP = 10000.0
 
 RISK_NEUTRAL = "risk-neutral"
 
