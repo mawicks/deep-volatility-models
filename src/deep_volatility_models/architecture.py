@@ -27,6 +27,8 @@ BATCH_NORM_EPS = 1e-4
 MIXTURE_MU_CLAMP = 0.10  # Clamp will be +/- this value
 SIGMA_INV_CLAMP = 1000.0
 
+RISK_NEUTRAL = "risk-neutral"
+
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
 
@@ -514,7 +516,7 @@ class UnivariateModel(torch.nn.Module):
         activation: torch.nn.Module = relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
-        risk_neutral=True,
+        mean_strategy=RISK_NEUTRAL,
         mixture_components=None,  # FIXME: This parameter should be removed.
     ):
         super().__init__()
@@ -535,7 +537,8 @@ class UnivariateModel(torch.nn.Module):
             feature_dimension,
         )
 
-        self.risk_neutral = risk_neutral
+        if mean_strategy == RISK_NEUTRAL:
+            self.risk_neutral = True
 
     @property
     def sampler(self):
@@ -572,9 +575,9 @@ class UnivariateModel(torch.nn.Module):
         # Get a "flat" feature vector for the series.
         latents = self.time_series_features(window, exogenous)
 
-        mu, sigma_inv = self.head(latents)
+        head_output = self.head(latents)
 
-        return mu, sigma_inv, latents
+        return head_output + (latents,)
 
     def forward(
         self,
@@ -627,7 +630,7 @@ class MixtureModel(torch.nn.Module):
         activation: torch.nn.Module = relu,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
-        risk_neutral=True,
+        mean_strategy=RISK_NEUTRAL,
     ):
         super().__init__()
 
@@ -650,12 +653,13 @@ class MixtureModel(torch.nn.Module):
             mixture_components,
         )
 
-        if risk_neutral and (input_symbols != 1 or output_symbols not in (1, None)):
-            raise ValueError(
-                f"Specifying risk_neutral is only possible with input_symbols == 1 and output_symbols in (1, None)"
-                f"but input_symbosl={input_symbols} and output_symbols={output_symbols}"
-            )
-        self.risk_neutral = risk_neutral
+        if mean_strategy == RISK_NEUTRAL:
+            if input_symbols != 1 or output_symbols not in (1, None):
+                raise ValueError(
+                    f"Specifying risk_neutral is only possible with input_symbols == 1 and output_symbols in (1, None)"
+                    f"but input_symbosl={input_symbols} and output_symbols={output_symbols}"
+                )
+            self.risk_neutral = True
 
     @property
     def is_mixture(self) -> bool:

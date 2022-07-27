@@ -38,6 +38,7 @@ EARLY_TERMINATION = 100  # Was 1000
 
 USE_MIXTURE = False
 RISK_NEUTRAL = True
+
 if RISK_NEUTRAL:  # These are the values for the univariate non-mixture model
     OPT_LEARNING_RATE = 0.000712  # Previously 0.000535
     OPT_DROPOUT = 0.009291  # Previously 0.001675
@@ -88,7 +89,7 @@ def create_new_model(
     gaussian_noise=OPT_GAUSSIAN_NOISE,
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
-    risk_neutral=RISK_NEUTRAL,
+    mean_strategy="risk-neutral",
     use_mixture=USE_MIXTURE,
 ):
     if use_mixture:
@@ -102,7 +103,7 @@ def create_new_model(
             dropout=dropout,
             use_batch_norm=use_batch_norm,
             activation=ACTIVATION,
-            risk_neutral=risk_neutral,
+            mean_strategy=mean_strategy,
         )
     else:
         network = architecture.UnivariateModel(
@@ -114,7 +115,7 @@ def create_new_model(
             dropout=dropout,
             use_batch_norm=use_batch_norm,
             activation=ACTIVATION,
-            risk_neutral=risk_neutral,
+            mean_strategy=mean_strategy,
         )
 
     embedding = torch.nn.Embedding(embedding_size, embedding_dimension)
@@ -386,7 +387,7 @@ def run(
     existing_model,
     symbols,
     refresh,
-    risk_neutral,
+    mean_strategy,
     only_embeddings,
     use_mixture=USE_MIXTURE,
     max_epochs=EPOCHS,
@@ -415,7 +416,7 @@ def run(
     logging.info(f"existing_model: {existing_model}")
     logging.info(f"symbols: {symbols}")
     logging.info(f"refresh: {refresh}")
-    logging.info(f"risk_neutral: {risk_neutral}")
+    logging.info(f"mean_strategy: {mean_strategy}")
     logging.info(f"only_embeddings: {only_embeddings}")
     logging.info(f"use_mixture: {use_mixture}")
     logging.info(f"window_size: {window_size}")
@@ -459,7 +460,7 @@ def run(
 
     # Do split before any random weight initialization so that any
     # subsequent random number generator calls won't affect the split.
-    # We want the splits to be the same for different architecutre
+    # We want the splits to be the same for different architecture
     # parameters to provide fair comparisons of different
     # architectures on the same split.
 
@@ -484,7 +485,7 @@ def run(
             use_mixture=use_mixture,
             use_batch_norm=use_batch_norm,
             dropout=dropout,
-            risk_neutral=risk_neutral,
+            mean_strategy=mean_strategy,
         )
         logging.info("Initialized new model")
 
@@ -568,11 +569,11 @@ def run(
     help="Refresh stock data",
 )
 @click.option(
-    "--risk-neutral/--no-risk-neutral",
-    is_flag=True,
-    default=RISK_NEUTRAL,
+    "--mean-strategy",
+    type=click.Choice(["risk-neutral", "zero", "estimate"]),
     show_default=True,
-    help="Use risk-neutral adjustment on predicted mean returns",
+    default="risk-neutral",
+    help="Method to use for mean output.",
 )
 @click.option(
     "--only-embeddings",
@@ -645,7 +646,7 @@ def main_cli(
     existing_model,
     symbol,
     refresh,
-    risk_neutral,
+    mean_strategy,
     only_embeddings,
     use_mixture,
     early_termination,
@@ -676,7 +677,7 @@ def main_cli(
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
-        risk_neutral=risk_neutral,
+        mean_strategy=mean_strategy,
         use_mixture=use_mixture,
         only_embeddings=only_embeddings,
         early_termination=early_termination,
