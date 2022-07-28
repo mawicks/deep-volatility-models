@@ -289,7 +289,7 @@ def run(model, symbol, simulations):
 @click.option(
     "--end-date",
     type=click.DateTime(formats=["%Y-%m-%d"]),
-    default=str(dt.date.today()),
+    default=None,
     show_default=True,
     help="End date",
 )
@@ -316,6 +316,9 @@ def run_cli(
 
     if start_date:
         start_date = start_date.date()
+
+    if end_date:
+        end_date = end_date.date()
 
     df = df.loc[start_date:end_date]
 
