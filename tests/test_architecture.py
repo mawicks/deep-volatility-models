@@ -132,7 +132,7 @@ def test_mixture_model(
                 mixture_components=mixture_components,
                 extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
-                risk_neutral=False,
+                mean_strategy=architecture.MeanStrategy.ESTIMATE,
             )
     else:
         # This is the base mixture model we're testing.
@@ -146,7 +146,7 @@ def test_mixture_model(
             mixture_components=mixture_components,
             extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
-            risk_neutral=False,
+            mean_strategy=architecture.MeanStrategy.ESTIMATE,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
@@ -217,7 +217,6 @@ def test_mixture_model(
             assert window_size == mixture_model.window_size
 
 
-# TODO - Add test cases for risk_neutral=True
 @pytest.mark.parametrize(
     "batch_size, window_size, feature_dim,"
     "exogenous_dim, extra_mixing_layers,"
@@ -268,7 +267,7 @@ def test_basic_model(  # basic model referes to a non-mixture model
                 feature_dimension=feature_dim,
                 extra_mixing_layers=extra_mixing_layers,
                 use_batch_norm=use_batch_norm,
-                risk_neutral=False,
+                mean_strategy=architecture.MeanStrategy.ESTIMATE,
             )
     else:
         # This is the base model we're testing.
@@ -278,7 +277,7 @@ def test_basic_model(  # basic model referes to a non-mixture model
             feature_dimension=feature_dim,
             extra_mixing_layers=extra_mixing_layers,
             use_batch_norm=use_batch_norm,
-            risk_neutral=False,
+            mean_strategy=architecture.MeanStrategy.ESTIMATE,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
