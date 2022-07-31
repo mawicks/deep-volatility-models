@@ -14,8 +14,8 @@ NOISE_DIM = 77
 EMBEDDING_SYMBOLS = 9
 EXTRA_MIXING_LAYERS = 0
 
-ESTIMATE = architecture.MeanStrategy.ESTIMATE
-RISK_NEUTRAL = architecture.MeanStrategy.RISK_NEUTRAL
+EST = architecture.MeanStrategy.ESTIMATE
+RN = architecture.MeanStrategy.RISK_NEUTRAL
 ZERO = architecture.MeanStrategy.ZERO
 
 UV = architecture.ModelType.UNIVARIATE
@@ -167,23 +167,38 @@ def test_time_series_features(
 
 
 @pytest.mark.parametrize(
-    "model_type, input_symbols, output_symbols,"
+    "model_type, mean_strategy, input_symbols, output_symbols,"
     "is_mixture, mixture_components, exogenous_dim,"
     "use_batch_norm, expect_value_error",
     [
-        (UV, 1, None, True, 5, 0, True, False),  # Without an exogenous input
-        (MV, 9, None, True, 5, 7, True, False),  # Multivariate
-        (MV, 9, 9, True, 5, 7, True, False),  # Speciying output symbol dim
-        (MV, 9, 8, True, 5, 7, True, False),  # Differing input/output symbol dim
-        (UV, 1, None, True, 5, 7, False, False),  # Without batch norm
-        (UV, 1, 1, False, 0, 0, True, False),  # Without an exogenous input
-        (UV, 1, 1, False, 0, 7, True, False),  # Without extra mixing layers
-        (UV, 1, 1, False, 0, 7, False, False),  # Without batch norm
-        (MV, 9, None, False, 0, 7, True, False),  # Multivariate
+        # Non mixture models
+        #   Univariate
+        (UV, EST, 1, 1, False, 0, 0, True, False),  # No exogenous input
+        (UV, EST, 1, 1, False, 0, 7, True, False),  # With exogenous
+        (UV, ZERO, 1, 1, False, 0, 7, True, False),  # Zero head
+        (UV, RN, 1, 1, False, 0, 7, True, False),  # Risk-neutral head
+        (UV, EST, 1, 1, False, 0, 7, False, False),  # No batch norm
+        #   Multivariate
+        (MV, EST, 9, None, False, 0, 7, True, False),  # Estimate mu
+        (MV, ZERO, 9, None, False, 0, 7, True, False),  # Zero head
+        (MV, RN, 9, None, False, 0, 7, True, True),  # Risk-neutral head (ValueError)
+        # Mixture models
+        #   Univariate
+        (UV, EST, 1, None, True, 5, 0, True, False),  # No exogenous input
+        (UV, ZERO, 1, None, True, 5, 0, True, False),  # No exogenous input - FAILS
+        (UV, RN, 1, None, True, 5, 0, True, False),  # No exogenous input - FAILS
+        #   Multivariate
+        (MV, EST, 9, None, True, 5, 7, True, False),
+        (MV, EST, 9, 9, True, 5, 7, True, False),  # Specifying output symbol dim
+        (MV, EST, 9, 8, True, 5, 7, True, False),  # Output < input symbols
+        (MV, ZERO, 3, 2, True, 5, 7, True, False),  # Zero mean with output < input
+        (MV, RN, 9, 8, True, 5, 7, True, True),  # Risk-neutral (ValueError)
+        (MV, EST, 9, None, True, 5, 7, False, False),  # No batch norm
     ],
 )
 def test_deep_volatility_model(
     model_type,
+    mean_strategy,
     input_symbols,
     output_symbols,
     is_mixture,
@@ -213,7 +228,7 @@ def test_deep_volatility_model(
         with pytest.raises(ValueError):
             volatility_model = architecture.DeepVolatilityModel(
                 window_size=WINDOW_SIZE,
-                mean_strategy=ESTIMATE,
+                mean_strategy=mean_strategy,
                 model_type=model_type,
                 input_symbols=input_symbols,
                 output_symbols=output_symbols,
@@ -228,7 +243,7 @@ def test_deep_volatility_model(
         # This is the base mixture model we're testing.
         volatility_model = architecture.DeepVolatilityModel(
             window_size=WINDOW_SIZE,
-            mean_strategy=ESTIMATE,
+            mean_strategy=mean_strategy,
             model_type=model_type,
             input_symbols=input_symbols,
             output_symbols=output_symbols,
@@ -375,7 +390,7 @@ def test_mixture_model(
                 mixture_components=mixture_components,
                 extra_mixing_layers=EXTRA_MIXING_LAYERS,
                 use_batch_norm=use_batch_norm,
-                mean_strategy=ESTIMATE,
+                mean_strategy=EST,
             )
     else:
         # This is the base mixture model we're testing.
@@ -389,7 +404,7 @@ def test_mixture_model(
             mixture_components=mixture_components,
             extra_mixing_layers=EXTRA_MIXING_LAYERS,
             use_batch_norm=use_batch_norm,
-            mean_strategy=ESTIMATE,
+            mean_strategy=EST,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)
@@ -499,7 +514,7 @@ def test_basic_model(  # basic model referes to a non-mixture model
                 feature_dimension=feature_dim,
                 extra_mixing_layers=EXTRA_MIXING_LAYERS,
                 use_batch_norm=use_batch_norm,
-                mean_strategy=ESTIMATE,
+                mean_strategy=EST,
             )
     else:
         # This is the base model we're testing.
@@ -509,7 +524,7 @@ def test_basic_model(  # basic model referes to a non-mixture model
             feature_dimension=feature_dim,
             extra_mixing_layers=EXTRA_MIXING_LAYERS,
             use_batch_norm=use_batch_norm,
-            mean_strategy=ESTIMATE,
+            mean_strategy=EST,
         )
         # Also create an embedding to test that ModelWithEmbedding returns sane results
         embedding = torch.nn.Embedding(EMBEDDING_SYMBOLS, exogenous_dim)

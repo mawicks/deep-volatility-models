@@ -43,10 +43,14 @@ def univariate_log_likelihood(
         or mu.shape != (mb_size, mixture_components, symbols)
         or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
     ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+        raise ValueError(
+            f"Dimensions of x ({x.shape}), log_p ({log_p.shape}), mu ({mu.shape}), and sigma_inv ({sigma_inv.shape}) are inconsistent"
+        )
 
     if symbols != 1:
-        raise ValueError("This function requires the number of symbols to be 1")
+        raise ValueError(
+            f"Symbol dim is {symbols}. This function requires the number of symbols to be 1"
+        )
 
     # Drop the dimensions that were just confirmed to be one.
     x = x.squeeze(1)
@@ -99,7 +103,9 @@ def multivariate_log_likelihood(
         or mu.shape != (mb_size, mixture_components, channels)
         or sigma_inv.shape != (mb_size, mixture_components, channels, channels)
     ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+        raise ValueError(
+            f"Dimensions of x ({x.shape}), log_p ({log_p.shape}), mu ({mu.shape}), and sigma_inv ({sigma_inv.shape}) are inconsistent"
+        )
 
     # Ensure the sigma_inv matrix is lower triangular
     # Values in the upper triangle part get ignored
@@ -180,16 +186,10 @@ def new_univariate_combine_metrics(p, mu, sigma_inv):
     if not isinstance(sigma_inv, torch.Tensor):
         sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
 
-    mb_size, mixture_components, symbols = sigma_inv.shape[:3]
-    if (
-        p.shape != (mb_size, mixture_components)
-        or mu.shape != (mb_size, mixture_components, symbols)
-        or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
-    ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
-
-    if symbols != 1:
-        raise ValueError("This code requires the number of symbols to be 1")
+    if p.shape != mu.shape or p.shape != sigma_inv.shape:
+        raise ValueError(
+            f"Dimensions of p ({p.shape}), mu ({mu.shape}), and sigma_inv ({sigma_inv.shape}) are inconsistent"
+        )
 
     variance = (1.0 / sigma_inv) ** 2
     composite_mean = torch.sum(p * mu, dim=1)
@@ -245,10 +245,14 @@ def univariate_combine_metrics(p, mu, sigma_inv):
         or mu.shape != (mb_size, mixture_components, symbols)
         or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
     ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+        raise ValueError(
+            f"Dimensions of p ({p.shape}), mu ({mu.shape}), and sigma_inv ({sigma_inv.shape}) are inconsistent"
+        )
 
     if symbols != 1:
-        raise ValueError("This code requires the number of symbols to be 1")
+        raise ValueError(
+            f"Symbol dim is {symbol}. This code requires the number of symbols to be 1"
+        )
 
     # Drop the symbol dimension on mu and sigma_inv which is known to be 1
     # for this special case.
@@ -304,21 +308,26 @@ def multivariate_combine_metrics(p, mu, sigma_inv):
     if not isinstance(sigma_inv, torch.Tensor):
         sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
 
-    mb_size, mixture_components, output_symbols, input_symbols = sigma_inv.shape
     if (
-        p.shape != (mb_size, mixture_components)
-        or mu.shape != (mb_size, mixture_components, output_symbols)
-        or sigma_inv.shape
-        != (mb_size, mixture_components, output_symbols, input_symbols)
+        p.shape != sigma_inv.shape[:2]
+        or mu.shape != sigma_inv.shape[:3]
+        or sigma_inv.shape[2] > sigma_inv.shape[3]
     ):
-        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+        raise ValueError(
+            f"Dimensions of p ({p.shape}), mu ({mu.shape}), and sigma_inv ({sigma_inv.shape}) are inconsistent"
+        )
 
     #  Note that sigma_inv may not be square but the number of rows
     #  should be no more than the number of columns
 
     inverse_covariance = torch.matmul(sigma_inv, torch.transpose(sigma_inv, 2, 3))
-    covariance = torch.inverse(inverse_covariance)
-    composite_mean = torch.sum(p * mu, dim=1)
+    try:
+        covariance = torch.inverse(inverse_covariance)
+    except Exception as e:
+        print(e)
+        covariance = torch.zeros(inverse_covariance.shape)
+
+    composite_mean = torch.sum(p.unsqueeze(2).expand(mu.shape) * mu, dim=1)
 
     # Composite covariance comes from the shifted component means and
     # shifted component covariances.  Here's a derivation:
@@ -328,8 +337,12 @@ def multivariate_combine_metrics(p, mu, sigma_inv):
     #                          = cov_i+ (mu_i-mu)(mu_i-mu)'
 
     shifted_means = (mu - composite_mean.unsqueeze(1).expand(mu.shape)).unsqueeze(3)
-    shifted_component_variances = variance + torch.matmul(
+    shifted_component_variances = covariance + torch.matmul(
         shifted_means, torch.transpose(shifted_means, 2, 3)
     )
-    composite_covariance = torch.sum(p * shifted_component_variances, dim=1)
+    composite_covariance = torch.sum(
+        p.unsqueeze(2).unsqueeze(3).expand(shifted_component_variances.shape)
+        * shifted_component_variances,
+        dim=1,
+    )
     return composite_mean, composite_covariance

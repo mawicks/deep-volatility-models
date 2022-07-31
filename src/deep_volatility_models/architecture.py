@@ -418,7 +418,7 @@ class NewUnivariateMixtureHead(torch.nn.Module):
 
         # mean is either zeros depending on nothing or a linear layer
         if mean_strategy is MeanStrategy.ZERO:
-            self.mu_head = ZeroNetwork((mixture_components, 1))
+            self.mu_head = ZeroNetwork((mixture_components,))
         else:
             self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
 
