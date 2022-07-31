@@ -340,6 +340,7 @@ def test_deep_volatility_model(
             # Confirm that the window_size property returns the correct size:
             assert volatility_model.window_size == WINDOW_SIZE
 
+            # For mixture models do additional testing on log_p.
             if is_mixture:
                 assert log_p_u.shape == (BATCH_SIZE, mixture_components)
                 assert log_p.shape == log_p_u.shape
@@ -470,14 +471,15 @@ def test_mixture_model(
             # Call embedding_model.forward()
             log_p_e, mu_e, sigma_inv_e, latents_e = embedding_model((ts_data, encoding))
 
-            assert log_p_u.shape == (batch_size, mixture_components)
-            assert mu_u.shape == (batch_size, mixture_components, output_symbols)
-            assert sigma_inv_u.shape == (
+            assert sigma_inv.shape == (
                 batch_size,
                 mixture_components,
                 output_symbols,
                 input_symbols,
             )
+            assert mu.shape == sigma_inv.shape[:3]
+            assert log_p.shape == sigma_inv.shape[:2]
+
             assert latents_u.shape == (batch_size, feature_dim)
 
             assert log_p.shape == log_p_u.shape
@@ -489,6 +491,10 @@ def test_mixture_model(
             assert mu.shape == mu_e.shape
             assert sigma_inv.shape == sigma_inv_e.shape
             assert latents.shape == latents_e.shape
+
+            # Make sure the probabilities for a mixture sum to approximately 1.
+            summed_p = torch.sum(torch.exp(log_p), dim=1)
+            assert all(torch.abs(summed_p - 1.0) < EPS)
 
             # Confirm that the window_size property returns the correct size:
             assert mixture_model.window_size == WINDOW_SIZE
@@ -587,13 +593,13 @@ def test_basic_model(  # basic model referes to a non-mixture model
             # Call embedding_model.forward()
             mu_e, sigma_inv_e, latents_e = embedding_model((ts_data, encoding))
 
-            assert mu_u.shape == (batch_size, 1)
-            assert sigma_inv_u.shape == (
+            assert sigma_inv.shape == (
                 batch_size,
                 1,
                 1,
             )
-            assert latents_u.shape == (batch_size, feature_dim)
+            assert mu.shape == sigma_inv.shape[:2]
+            assert latents.shape == (batch_size, feature_dim)
 
             assert mu.shape == mu_u.shape
             assert sigma_inv.shape == sigma_inv_u.shape
