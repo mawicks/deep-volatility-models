@@ -512,6 +512,9 @@ class NewMultivariateHead(torch.nn.Module):
         """
         mu = self.mu_head(latents)
 
+        # The network for mu uses a 1d one-pixel de-convolutional layer which
+        # require the input to be sequence-like.  Create an artificial sequence
+        # dimension before calling.
         latents_1d = latents.unsqueeze(2)
         sigma_inv = self.sigma_inv_head(latents_1d)
 

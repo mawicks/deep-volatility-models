@@ -7,7 +7,7 @@ import deep_volatility_models.architecture as architecture
 
 logsoftmax = torch.nn.LogSoftmax(dim=1)
 
-BATCH_SIZE = 5
+BATCH_SIZE = 13
 FEATURE_DIMENSION = 11
 WINDOW_SIZE = 16
 NOISE_DIM = 77
