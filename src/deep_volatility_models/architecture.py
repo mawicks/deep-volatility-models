@@ -691,7 +691,7 @@ class DeepVolatilityModel(torch.nn.Module):
 
     @property
     def sampler(self):
-        if is_mixture:
+        if self.is_mixture:
             return sample.multivariate_mixture_sample
         else:
             return sample.multivariate_sample
@@ -1064,7 +1064,7 @@ class MixtureModel(torch.nn.Module):
         activation: torch.nn.Module = DEFAULT_ACTIVATION_FUNCTION,
         dropout: float = DEFAULT_DROPOUT_P,
         use_batch_norm: bool = True,
-        mean_strategy=MeanStrategy.RISK_NEUTRAL,
+        mean_strategy: MeanStrategy = MeanStrategy.RISK_NEUTRAL,
     ):
         super().__init__()
 
@@ -1094,6 +1094,10 @@ class MixtureModel(torch.nn.Module):
                     f"but input_symbosl={input_symbols} and output_symbols={output_symbols}"
                 )
             self.risk_neutral = True
+        elif mean_strategy not in (MeanStrategy.ESTIMATE, MeanStrategy.ZERO):
+            raise ValueError(
+                f"mean_strategy: {mean_strategy} is not an instance of MeanStrategy"
+            )
 
     @property
     def is_mixture(self) -> bool:

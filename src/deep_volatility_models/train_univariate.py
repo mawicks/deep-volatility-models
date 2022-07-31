@@ -30,6 +30,16 @@ logging.basicConfig(
     force=True,
 )
 
+ESTIMATE = "estimate"
+RISK_NEUTRAL = "risk-neutral"
+ZERO = "zero"
+
+MEAN_STRATEGIES = {
+    ESTIMATE: architecture.MeanStrategy.ESTIMATE,
+    RISK_NEUTRAL: architecture.MeanStrategy.RISK_NEUTRAL,
+    ZERO: architecture.MeanStrategy.ZERO,
+}
+
 TRAIN_FRACTION = 0.80
 DEFAULT_SEED = 24  # Previously 42
 
@@ -37,9 +47,10 @@ EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
 USE_MIXTURE = False
-RISK_NEUTRAL = True
+USE_DEV_MODELS = False
 
-if RISK_NEUTRAL:  # These are the values for the univariate non-mixture model
+RISK_NEUTRAL_PARAMETERS = True
+if RISK_NEUTRAL_PARAMETERS:  # These are the values for the univariate non-mixture model
     OPT_LEARNING_RATE = 0.000712  # Previously 0.000535
     OPT_DROPOUT = 0.009291  # Previously 0.001675
     OPT_FEATURE_DIMENSION = 37  # Previously 41
@@ -89,10 +100,26 @@ def create_new_model(
     gaussian_noise=OPT_GAUSSIAN_NOISE,
     use_batch_norm=USE_BATCH_NORM,
     dropout=OPT_DROPOUT,
-    mean_strategy="risk-neutral",
+    mean_strategy=MEAN_STRATEGIES[RISK_NEUTRAL],
     use_mixture=USE_MIXTURE,
+    use_dev_models=USE_DEV_MODELS,
 ):
-    if use_mixture:
+    if use_dev_models:
+        network = architecture.DeepVolatilityModel(
+            window_size=window_size,
+            mean_strategy=mean_strategy,
+            model_type=architecture.ModelType.UNIVARIATE,
+            input_symbols=1,
+            feature_dimension=feature_dimension,
+            exogenous_dimension=embedding_dimension,
+            is_mixture=use_mixture,
+            mixture_components=mixture_components,
+            gaussian_noise=gaussian_noise,
+            activation=ACTIVATION,
+            dropout=dropout,
+            use_batch_norm=use_batch_norm,
+        )
+    elif use_mixture:
         network = architecture.MixtureModel(
             window_size,
             1,
@@ -407,6 +434,7 @@ def run(
     seed=DEFAULT_SEED,
     start_date=None,
     end_date=None,
+    use_dev_models=USE_DEV_MODELS,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -434,6 +462,7 @@ def run(
     logging.info(f"Seed: {seed}")
     logging.info(f"Start date: {start_date}")
     logging.info(f"End date: {end_date}")
+    logging.info(f"Use dev models: {use_dev_models}")
 
     model_network = embeddings = None
     if existing_model:
@@ -486,6 +515,7 @@ def run(
             use_batch_norm=use_batch_norm,
             dropout=dropout,
             mean_strategy=mean_strategy,
+            use_dev_models=use_dev_models,
         )
         logging.info("Initialized new model")
 
@@ -570,9 +600,9 @@ def run(
 )
 @click.option(
     "--mean-strategy",
-    type=click.Choice(["risk-neutral", "zero", "estimate"]),
+    type=click.Choice([RISK_NEUTRAL, ZERO, ESTIMATE]),
     show_default=True,
-    default="risk-neutral",
+    default=RISK_NEUTRAL,
     help="Method to use for mean output.",
 )
 @click.option(
@@ -640,6 +670,12 @@ def run(
     type=click.DateTime(formats=["%Y-%m-%d"]),
     help="Exclude training data on or after this date",
 )
+@click.option(
+    "--use-dev-models",
+    is_flag=True,
+    show_default=True,
+    help="Use development version of models.",
+)
 def main_cli(
     use_hsmd,
     model,
@@ -663,6 +699,7 @@ def main_cli(
     seed,
     start_date,
     end_date,
+    use_dev_models,
 ):
 
     if start_date:
@@ -677,7 +714,7 @@ def main_cli(
         existing_model=existing_model,
         symbols=symbol,
         refresh=refresh,
-        mean_strategy=mean_strategy,
+        mean_strategy=MEAN_STRATEGIES[mean_strategy],
         use_mixture=use_mixture,
         only_embeddings=only_embeddings,
         early_termination=early_termination,
@@ -694,6 +731,7 @@ def main_cli(
         seed=seed,
         start_date=start_date,
         end_date=end_date,
+        use_dev_models=use_dev_models,
     )
 
 
