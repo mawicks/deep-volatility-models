@@ -105,7 +105,7 @@ def multivariate_log_likelihood(
     # Values in the upper triangle part get ignored
     sigma_inv = torch.tril(sigma_inv)
 
-    e = x.unsqueeze(1).expand(mb_size, mixture_components, channels) - mu
+    e = x.unsqueeze(1).expand(mu.shape) - mu
     # e is (mb_size, mixture_components, channels)
 
     e = e.unsqueeze(3)
@@ -145,20 +145,23 @@ def multivariate_log_likelihood(
     return ll
 
 
-def univariate_combine_metrics(p, mu, sigma_inv):
+# TODO: Generalize the following function for the multivariate case.
+
+
+def new_univariate_combine_metrics(p, mu, sigma_inv):
     """
     Given a mixture model of normal distributions charaterized by probabilities
     (p), components-wise mean (mu) and component-wise inverse standard deviation
     (sigma_inv), compute the overall mean and inverse standard deviation for the
     mixture.
 
-    Note:  This assumes a univariate mu and sigma_inv.
+    Note:  This assumes a univariate mu and sigma_inv.  It's simpler than the multivariate version.
 
     Inputs:
         p: tensor of shape (mb_size, mixture_componente): probability of each component
-        mu: tensor of shape (mb_size, mixture_components, 1): mu for each
+        mu: tensor of shape (mb_size, mixture_components): mu for each
             component.
-        sigma_inv: tensor of shape (mb_size, mixture_components, 1, 1) containing
+        sigma_inv: tensor of shape (mb_size, mixture_components) containing
         the inverse of the standard deviation of each component.
 
     Outputs:
@@ -166,8 +169,9 @@ def univariate_combine_metrics(p, mu, sigma_inv):
         variance: tensor of shape (mb_size,) containing the
             variance of the mixture.
 
-        Note tha the return value is the standard deviation and *not* the inverse
-        of the standard deviation.
+        Note that the return value is the variance (i.e., the standard deviation squared) and *not* the inverse
+        of the standard deviation that's often used elsewhere in this code.
+
     """
     if not isinstance(p, torch.Tensor):
         p = torch.tensor(p, dtype=torch.float)
@@ -187,17 +191,145 @@ def univariate_combine_metrics(p, mu, sigma_inv):
     if symbols != 1:
         raise ValueError("This code requires the number of symbols to be 1")
 
-    # Drop symbols dimension on mu and sigma_inv which is known to be 1
+    variance = (1.0 / sigma_inv) ** 2
+    composite_mean = torch.sum(p * mu, dim=1)
+
+    # Composite variance comes from the shifted component means and
+    # shifted component covariances.  Here's a derivation:
+
+    # E[(x-mu)**2] = sum p_i E[(x_i-mu)**2]
+    # E[(x_i-mu)**2] = E[((x_i-mu_i) + (mu_i-mu))**2]
+    #                = sigma_i**2 + (mu_i-mu)**2
+
+    shifted_component_means = mu - composite_mean.unsqueeze(1).expand(mu.shape)
+    shifted_component_variances = variance + shifted_component_means**2
+    composite_variance = torch.sum(p * shifted_component_variances, dim=1)
+    return composite_mean, composite_variance
+
+
+def univariate_combine_metrics(p, mu, sigma_inv):
+    """
+    Given a mixture model of normal distributions charaterized by probabilities
+    (p), components-wise mean (mu) and component-wise inverse standard deviation
+    (sigma_inv), compute the overall mean and inverse standard deviation for the
+    mixture.
+
+    Note:  This assumes a univariate mu and sigma_inv.  It's simpler than the multivariate version.
+
+    Inputs:
+        p: tensor of shape (mb_size, mixture_componente): probability of each component
+        mu: tensor of shape (mb_size, mixture_components, 1): mu for each
+            component.
+        sigma_inv: tensor of shape (mb_size, mixture_components, 1, 1) containing
+        the inverse of the standard deviation of each component.
+
+    Outputs:
+        mu: tensor of shape (mb_size,) containing the expected mean
+        variance: tensor of shape (mb_size,) containing the
+            variance of the mixture.
+
+        Note that the return value is the variance (i.e., the standard deviation squared) and *not* the inverse
+        of the standard deviation that's often used elsewhere in this code.
+
+    """
+    if not isinstance(p, torch.Tensor):
+        p = torch.tensor(p, dtype=torch.float)
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.tensor(mu, dtype=torch.float)
+    if not isinstance(sigma_inv, torch.Tensor):
+        sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
+
+    mb_size, mixture_components, symbols = sigma_inv.shape[:3]
+    if (
+        p.shape != (mb_size, mixture_components)
+        or mu.shape != (mb_size, mixture_components, symbols)
+        or sigma_inv.shape != (mb_size, mixture_components, symbols, symbols)
+    ):
+        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+
+    if symbols != 1:
+        raise ValueError("This code requires the number of symbols to be 1")
+
+    # Drop the symbol dimension on mu and sigma_inv which is known to be 1
+    # for this special case.
+
     sigma_inv = sigma_inv.squeeze(3).squeeze(2)
     mu = mu.squeeze(2)
 
     variance = (1.0 / sigma_inv) ** 2
     composite_mean = torch.sum(p * mu, dim=1)
 
-    # TODO: Verify this is correct implementation of parallel axis theorem
+    # Composite variance comes from the shifted component means and
+    # shifted component covariances.  Here's a derivation:
+
     # E[(x-mu)**2] = sum p_i E[(x_i-mu)**2]
     # E[(x_i-mu)**2] = E[((x_i-mu_i) + (mu_i-mu))**2]
     #                = sigma_i**2 + (mu_i-mu)**2
-    shifted_component_variances = variance + (mu - composite_mean.unsqueeze(1)) ** 2
+
+    shifted_component_means = mu - composite_mean.unsqueeze(1).expand(mu.shape)
+    shifted_component_variances = variance + shifted_component_means**2
     composite_variance = torch.sum(p * shifted_component_variances, dim=1)
     return composite_mean, composite_variance
+
+
+def multivariate_combine_metrics(p, mu, sigma_inv):
+    """Given a mixture model of normal distributions charaterized by
+    probabilities (p), components-wise mean (mu) and component-wise
+    inverse standard deviation (sigma_inv), compute the overall mean
+    and inverse standard deviation for the mixture.
+
+    Note:  This is the multivariate version of univariate_combine_metrics.
+
+    Inputs:
+        p: tensor of shape (mb_size, mixture_componente) - probability of each component
+        mu: tensor of shape (mb_size, mixture_components, symbols) - mu for each
+            component.
+        sigma_inv: tensor of shape (mb_size, mixture_components, symbols, symbols) -
+            the inverse of the standard deviation of each component.
+
+    Outputs:
+        mu: tensor of shape (mb_size, symbols) - the mean of the mixture.
+        covariance: tensor of shape (mb_size, symbols, symbols) - the covariance of the mixture.
+
+        Note that the return value is the covariance matrix.  This is
+        different from elsewhere in the code where we often use the
+        Cholesky factor of the inverse of the covariance matrix to
+        represent the variance.
+
+    """
+    if not isinstance(p, torch.Tensor):
+        p = torch.tensor(p, dtype=torch.float)
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.tensor(mu, dtype=torch.float)
+    if not isinstance(sigma_inv, torch.Tensor):
+        sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
+
+    mb_size, mixture_components, output_symbols, input_symbols = sigma_inv.shape
+    if (
+        p.shape != (mb_size, mixture_components)
+        or mu.shape != (mb_size, mixture_components, output_symbols)
+        or sigma_inv.shape
+        != (mb_size, mixture_components, output_symbols, input_symbols)
+    ):
+        raise ValueError("Dimensions of x, log_p, mu, and sigma_inv are inconsistent")
+
+    #  Note that sigma_inv may not be square but the number of rows
+    #  should be no more than the number of columns
+
+    inverse_covariance = torch.matmul(sigma_inv, torch.transpose(sigma_inv, 2, 3))
+    covariance = torch.inverse(inverse_covariance)
+    composite_mean = torch.sum(p * mu, dim=1)
+
+    # Composite covariance comes from the shifted component means and
+    # shifted component covariances.  Here's a derivation:
+
+    # E[(x-mu)(x-mu)'] = sum p_i E[(x_i-mu)(x_i-mu)']
+    # But E[(x_i-mu)(x_i-mu)'] = E[((x_i-mu_i)(x_i-mu_i)' + (mu_i-mu)(mu_i-mu)']
+    #                          = cov_i+ (mu_i-mu)(mu_i-mu)'
+
+    shifted_means = (mu - composite_mean.unsqueeze(1).expand(mu.shape)).unsqueeze(3)
+    shifted_component_variances = variance + torch.matmul(
+        shifted_means, torch.transpose(shifted_means, 2, 3)
+    )
+    composite_covariance = torch.sum(p * shifted_component_variances, dim=1)
+    return composite_mean, composite_covariance

@@ -109,7 +109,7 @@ class TimeSeriesFeatures(torch.nn.Module):
 
     def __init__(
         self,
-        input_channels: int,
+        symbols: int,
         window_size: int,
         exogenous_dimension: int = 0,
         feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
@@ -121,6 +121,8 @@ class TimeSeriesFeatures(torch.nn.Module):
     ):
         super().__init__()
 
+        if feature_dimension <= 0:
+            raise ValueError(f"Feature_dimension: {feature_dimension} is <= 0.")
         if window_size == 0 and exogenous_dimension == 0:
             raise ValueError("window_size and exogenous_dimension cannot both be zero.")
 
@@ -128,10 +130,10 @@ class TimeSeriesFeatures(torch.nn.Module):
             torch.tensor(window_size), requires_grad=False
         )
 
-        def conv_block(input_channels: int, width: int):
+        def conv_block(symbols: int, width: int):
             return [
                 torch.nn.Conv1d(
-                    input_channels,
+                    symbols,
                     feature_dimension,
                     width,
                     stride=width,
@@ -152,7 +154,7 @@ class TimeSeriesFeatures(torch.nn.Module):
                 ]
             )
 
-            layers.extend(conv_block(input_channels, 4))
+            layers.extend(conv_block(symbols, 4))
             window_size //= 4
 
             while window_size > 1:
@@ -257,13 +259,16 @@ class ZeroNetwork(torch.nn.Module):
         self.shape = shape
 
     def forward(self, input_tensor: torch.Tensor):
-        minibatch_size = input_tensor.shape[0]
+        if isinstance(input_tensor, tuple):
+            minibatch_size = input_tensor[0].shape[0]
+        else:
+            minibatch_size = input_tensor.shape[0]
         return torch.zeros((minibatch_size,) + self.shape)
 
 
 class UnivariateMeanEstimator(torch.nn.Module):
     """
-    A network that estimates the value of mu from the latent input
+    A network that estimates the value of mu (optionally a multivariate vector) from the latent input
     """
 
     def __init__(self, feature_dimension: int):
@@ -316,20 +321,20 @@ class NewUnivariateHead(torch.nn.Module):
     ):
         super().__init__()
 
-        # mu_head turns feature vector into a single mu estiamte.
+        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
+        self.sigma_inv_head = torch.nn.Linear(feature_dimension, 1)
+
+        # mu_head turns feature vector into a scalar mu estiamte.
         if mean_strategy is MeanStrategy.ESTIMATE:
-            self.mu_head = MeanEstimator(feature_dimension)
+            self.mu_head = UnivariateMeanEstimator(feature_dimension)
 
         elif mean_strategy is MeanStrategy.ZERO:
             self.mu_head = ZeroNetwork()
 
         elif mean_strategy is MeanStrategy.RISK_NEUTRAL:
-            pass
+            self.mu_head = UnivariateRiskNeutrallMean()
         else:
             raise ValueError(f"mean_strategy has unexpected value: {mean_strategy}")
-
-        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
-        self.sigma_inv_head = torch.nn.Linear(feature_dimension, 1)
 
     def forward(self, latents: torch.Tensor):
         """
@@ -340,20 +345,49 @@ class NewUnivariateHead(torch.nn.Module):
            sigma_inv: torch.Tensor of shape (minibatch_size, symbols=1, symbols=1)
 
         """
-        mu = self.mu_head(latents)
         sigma_inv = self.sigma_inv_head(latents)
+        mu = self.mu_head((sigma_inv, latents))
 
-        # The unsqueeze() call is required to maintain dimensions that comform
-        # with the multivarate case.  In the multivate case, sigma_inv is a
+        # The unsqueeze() calls are required to maintain dimensions that comform
+        # with the multivarate case.  In the multivate case, mu is a vector
+        # (with dimension equal to the number of symbols) and sigma_inv is a
         # matrix (with row and colum dimensions equal to the number of symbols)
+        # In the univariate case, the unsqueeze() creates the extra dimensions
+        # with a value of 1.
 
         sigma_inv = sigma_inv.unsqueeze(2)
 
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
-
         return mu, sigma_inv
+
+    @property
+    def is_mixture(self):
+        return False
+
+
+def new_mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
+    p = torch.exp(log_p)
+    mu_c, var_c = mixture_model_stats.new_univariate_combine_metrics(p, mu, sigma_inv)
+    # log_mean_return is log of mean return as opposed to mean of log return.
+    log_mean_return = mu_c + 0.5 * var_c
+    log_mean_return = log_mean_return.unsqueeze(1).expand(mu.shape)
+
+    return log_p, (mu - log_mean_return), sigma_inv
+
+
+def new_mixture_zero_adjustment(log_p, mu, sigma_inv):
+    p = torch.exp(log_p)
+    mu_c = mixture_model_stats.new_univariate_combine_metrics(p, mu, sigma_inv)[0]
+    mu_c = mu_c.unsqueeze(1).expand(mu.shape)
+
+    return log_p, (mu - mu_c), sigma_inv
+
+
+def new_multivariate_mixture_zero_adjustment(log_p, mu, sigma_inv):
+    p = torch.exp(log_p)
+    mu_c = mixture_model_stats.multivariate_combine_metrics(p, mu, sigma_inv)[0]
+    mu_c = mu_c.unsqueeze(1).expand(mu.shape)
+
+    return log_p, (mu - mu_c), sigma_inv
 
 
 def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
@@ -368,7 +402,7 @@ def mixture_risk_neutral_adjustment(log_p, mu, sigma_inv):
 
 class NewUnivariateMixtureHead(torch.nn.Module):
     """
-    TODO
+    Univariate, mixture head.
     """
 
     def __init__(
@@ -391,10 +425,12 @@ class NewUnivariateMixtureHead(torch.nn.Module):
         # sigma_inv is a linear layer (the sign of sigma_inv is irrelevant).
         self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)
 
-        if mean_straegy is MeanStrategy.RISK_NEUTRAL:
-            self.risk_neutral_adjustment = mixture_risk_neutral_adjustment
+        if mean_strategy is MeanStrategy.RISK_NEUTRAL:
+            self.adjustment = new_mixture_risk_neutral_adjustment
+        elif mean_strategy is MeanStrategy.ZERO:
+            self.adjustment = new_mixture_zero_adjustment
         else:
-            self.risk_neutral_adjustment = None
+            self.adjustment = None
 
     def forward(self, latents: torch.Tensor):
         """Argument:
@@ -407,33 +443,162 @@ class NewUnivariateMixtureHead(torch.nn.Module):
                mixture_components, symbols=1, symbols=1)
 
         """
+        log_p = logsoftmax(self.p_head(latents))
+        mu = self.mu_head(latents)
+        sigma_inv = self.sigma_inv_head(latents)
+
+        if self.adjustment:
+            log_p, mu, sigma_inv = self.adjustment(log_p, mu, sigma_inv)
+
         # The unsqueeze() calls are required to maintain dimensions that comform
         # with the multivarate case.  In the multivate case, mu is a vector
         # (with dimension equal to the number of symbols) and sigma_inv is a
         # matrix (with row and colum dimensions equal to the number of symbols)
-        # In the univariate case, the unsqueeze() create the extra dimensions
+        # In the univariate case, the unsqueeze() creates the extra dimensions
         # with a value of 1.
 
-        log_p = logsoftmax(self.p_head(latents))
-        mu = self.mu_head(latents).unsqueeze(2)
-        sigma_inv = self.sigma_inv_head(latents).unsqueeze(2).unsqueeze(3)
-
-        if self.risk_neutral_adjustment:
-            log_p, mu, sigma_inv = self.risk_neutral_adjustment(log_p, mu, sigma_inv)
-
-        if not self.training:
-            mu = torch.clamp(mu, -MIXTURE_MU_CLAMP, MIXTURE_MU_CLAMP)
-            sigma_inv = torch.clamp(sigma_inv, -SIGMA_INV_CLAMP, SIGMA_INV_CLAMP)
+        mu = mu.unsqueeze(2)
+        sigma_inv = sigma_inv.unsqueeze(2).unsqueeze(3)
 
         return log_p, mu, sigma_inv
 
+    @property
+    def is_mixture(self):
+        return True
+
 
 class NewMultivariateHead(torch.nn.Module):
-    def __init__(self, mean_strategy: MeanStrategy):
+    """
+    Multivariate, non-mixture head.
+    """
+
+    def __init__(
+        self,
+        feature_dimension: int,
+        input_symbols: int,
+        output_symbols: Union[int, None] = None,
+        mean_strategy: MeanStrategy = MeanStrategy.RISK_NEUTRAL,
+    ):
         super().__init__()
 
-    def forward(self, latent: torch.Tensor):
-        pass
+        if output_symbols is None:
+            output_symbols = input_symbols
+
+        # mu_head turns feature vector into a vector mu estiamte.
+        if mean_strategy is MeanStrategy.ESTIMATE:
+            self.mu_head = torch.nn.Linear(feature_dimension, output_symbols)
+
+        elif mean_strategy is MeanStrategy.ZERO:
+            self.mu_head = ZeroNetwork((output_symbols,))
+
+        else:
+            raise ValueError(
+                f"mean_strategy cannot be {mean_strategy} for multivariate model"
+            )
+
+        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
+        self.sigma_inv_head = torch.nn.ConvTranspose1d(
+            feature_dimension, output_symbols, input_symbols
+        )
+
+    def forward(self, latents: torch.Tensor):
+        """
+        Argument:
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
+        Returns:
+           mu: torch.Tensor of shape (minibatch_size, output_symbols=1)
+           sigma_inv: torch.Tensor of shape (minibatch_size, output_symbols=1, input_symbols=1)
+
+        """
+        mu = self.mu_head(latents)
+
+        latents_1d = latents.unsqueeze(2)
+        sigma_inv = self.sigma_inv_head(latents_1d)
+
+        return mu, sigma_inv
+
+    @property
+    def is_mixture(self):
+        return False
+
+
+class NewMultivariateMixtureHead(torch.nn.Module):
+    """
+    Multivariate, non-mixture head.
+    """
+
+    def __init__(
+        self,
+        feature_dimension: int,
+        mixture_components: int,
+        input_symbols: int,
+        mean_strategy: MeanStrategy = MeanStrategy.RISK_NEUTRAL,
+        output_symbols: Union[int, None] = None,
+    ):
+        super().__init__()
+
+        if output_symbols is None:
+            output_symbols = input_symbols
+
+        self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
+
+        # mu_head turns feature vector into a vector mu estiamte.
+        # Both ESTIMATE and ZERO strategies use an estimate.  The "zeroing" is done
+        # on the composite mean, not component-wise.
+
+        if mean_strategy in (MeanStrategy.ESTIMATE, MeanStrategy.ZERO):
+            self.mu_head = torch.nn.ConvTranspose1d(
+                feature_dimension, mixture_components, output_symbols
+            )
+
+        else:
+            raise ValueError(
+                f"mean_strategy cannot be {mean_strategy} for multivariate model"
+            )
+
+        # sigma_inv_head turns feature vectors into a single 1/sigma estimate
+        self.sigma_inv_head = torch.nn.ConvTranspose2d(
+            feature_dimension,
+            mixture_components,
+            (output_symbols, input_symbols),
+        )
+
+        if mean_strategy is MeanStrategy.ZERO:
+            self.adjustment = new_multivariate_mixture_zero_adjustment
+        else:
+            self.adjustment = None
+
+    def forward(self, latents: torch.Tensor):
+        """
+        Argument:
+           latents: torch.Tensor of shape (minibatch_size, feature_dimension)
+        Returns:
+           mu: torch.Tensor of shape (minibatch_size, output_symbols=1)
+           sigma_inv: torch.Tensor of shape (minibatch_size, output_symbols=1, input_symbols=1)
+
+        """
+        log_p = logsoftmax(self.p_head(latents))
+
+        # The network for mu uses a 1d one-pixel de-convolutional layer which
+        # require the input to be sequence-like.  Create an artificial sequence
+        # dimension before calling.
+        latents_1d = latents.unsqueeze(2)
+        mu = self.mu_head(latents_1d)
+
+        # The network for sigma_inv uses a 2d one-pixel de-convolutional layer
+        # which requires the input to be image-like.  Create artificial x and y
+        # dimensions before calling.
+        latents_2d = latents_1d.unsqueeze(3)
+        sigma_inv = self.sigma_inv_head(latents_2d)
+
+        if self.adjustment:
+            log_p, mu, sigma_inv = self.adjustment(log_p, mu, sigma_inv)
+
+        return log_p, mu, sigma_inv
+
+    @property
+    def is_mixture(self):
+        return True
 
 
 class DeepVolatilityModel(torch.nn.Module):
@@ -444,11 +609,12 @@ class DeepVolatilityModel(torch.nn.Module):
         window_size: int,
         mean_strategy=MeanStrategy.RISK_NEUTRAL,
         model_type=ModelType.UNIVARIATE,
-        is_mixture: bool = False,
+        input_symbols: int = 1,
+        output_symbols: Union[int, None] = None,  # None means use output = input
         feature_dimension: int = DEFAULT_FEATURE_DIMENSION,
         exogenous_dimension: int = 0,
+        is_mixture: bool = False,
         mixture_components: int = 1,
-        input_symbols: int = 1,
         extra_mixing_layers: int = 0,
         gaussian_noise: float = DEFAULT_GAUSSIAN_NOISE,
         activation: torch.nn.Module = relu,
@@ -457,24 +623,26 @@ class DeepVolatilityModel(torch.nn.Module):
     ):
         super().__init__()
 
-        if not is_mixture and mixture_component > 1:
+        if output_symbols is None:
+            output_symbols = input_symbols
+
+        if not is_mixture and mixture_components > 1:
             raise ValueError(
                 "Must specify is_mixture when mixture_compoents > 1: "
                 f"is_mixture: {is_mixture}, mixture_components: {mixture_components}"
             )
 
-        if model_type is ModelType.UNIVARIATE and input_symbols > 1:
+        if model_type is ModelType.UNIVARIATE and (
+            input_symbols > 1 or output_symbols > 1
+        ):
             raise ValueError(
-                "Must specify model_type as UNIVARIATE when input_symbols > 1: "
-                f"model_type: {model_type}, input_symbols: {input_symbols}"
+                "Must specify model_type as UNIVARIATE when output_symbols or input_symbols > 1: "
+                f"model_type: {model_type}, output_symbols: {output_symbols}, input_symbols: {input_symbols}"
             )
-
-        # Save is_mixture so model can be asked if it's a mixture.
-        self.is_mixture = is_mixture
 
         # TimeSeriesFeatures is the same for mixture/non-mixture or univariate/multivariate
         self.time_series_features = TimeSeriesFeatures(
-            symbols,
+            input_symbols,
             window_size,
             feature_dimension=feature_dimension,
             exogenous_dimension=exogenous_dimension,
@@ -486,31 +654,47 @@ class DeepVolatilityModel(torch.nn.Module):
         )
 
         if not is_mixture and model_type is ModelType.UNIVARIATE:
-            self.head = NewUnivariateHead(feature_dimension, mean_strategy)
+            self.head = NewUnivariateHead(
+                feature_dimension=feature_dimension,
+                mean_strategy=mean_strategy,
+            )
 
         elif is_mixture and model_type is ModelType.UNIVARIATE:
             self.head = NewUnivariateMixtureHead(
-                feature_dimension, mixture_components, mean_strategy
+                feature_dimension=feature_dimension,
+                mixture_components=mixture_components,
+                mean_strategy=mean_strategy,
             )
 
         elif not is_mixture and model_type is ModelType.MULTIVARIATE:
-            self.head = NewMultivariateHead(feature_dimension, symbols, mean_strategy)
+            self.head = NewMultivariateHead(
+                feature_dimension=feature_dimension,
+                input_symbols=input_symbols,
+                output_symbols=output_symbols,
+                mean_strategy=mean_strategy,
+            )
 
         elif is_mixture and model_type is ModelType.MULTIVARIATE:
             self.head = NewMultivariateMixtureHead(
-                feature_dimension, symbols, mixture_components, mean_strategy
+                feature_dimension=feature_dimension,
+                mixture_components=mixture_components,
+                input_symbols=input_symbols,
+                output_symbols=output_symbols,
+                mean_strategy=mean_strategy,
             )
         else:
             raise ValueError("Unknown model_type: {model_type}")
 
-        if not is_mixture:
-            self.sampler = sample.multivariate_sample
-        else:
-            self.sampler = sample.multivariate_mixture_sample
+    @property
+    def is_mixture(self):
+        return self.head.is_mixture
 
     @property
     def sampler(self):
-        return self.sampler
+        if is_mixture:
+            return sample.multivariate_mixture_sample
+        else:
+            return sample.multivariate_sample
 
     def simulate_one(
         self,
@@ -518,10 +702,6 @@ class DeepVolatilityModel(torch.nn.Module):
         time_samples: int,
     ) -> torch.Tensor:
         return sample.simulate_one(self, predictors, time_samples)
-
-    @property
-    def is_mixture(self) -> bool:
-        return self.is_mixture
 
     @property
     def window_size(self) -> int:
@@ -537,6 +717,7 @@ class DeepVolatilityModel(torch.nn.Module):
            exogenous: torch.Tensor to be mixed in or None
 
         Returns:
+           head_output - containing log_p (optionally), mu, and sigma_inv:
            For non-mixture models:
                mu: torch.Tensor of shape (minibatch_size, symbols) - predicted mean of vector of symbol log returns
                sigma_inv: (minibatch_size, output_symbols, input_symbols) - predicted inverse covariance of symbol log returns
@@ -545,6 +726,8 @@ class DeepVolatilityModel(torch.nn.Module):
                log_p: tourch.Tensor of shape (minibatch_size, components) - log_probability of each component
                mu: torch.Tensor of shape (minibatch_size, components, symbols) - predicted mean components of vector of symbol log returns
                sigma_inv: (minibatch_size, components, output_symbols, input_symbols) - predicted inverse covariance components of symbol log returns
+
+           latents: torch.Tensor of shape(minibatch_sizek feature_dimension)
 
         """
         # Get a "flat" latent feature vector for the series.
@@ -689,7 +872,9 @@ class MultivariateMixtureHead(torch.nn.Module):
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
 
         self.mu_head = torch.nn.ConvTranspose1d(
-            feature_dimension, mixture_components, output_symbols
+            feature_dimension,
+            mixture_components,
+            output_symbols,
         )
         # It seems odd here to use "channels" as the matrix dimension,
         # but that's exactly what we want.  The number of input
