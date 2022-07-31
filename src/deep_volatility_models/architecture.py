@@ -416,11 +416,8 @@ class NewUnivariateMixtureHead(torch.nn.Module):
         # p is just a linaer layer whose output gets a softmax() in forward().
         self.p_head = torch.nn.Linear(feature_dimension, mixture_components)
 
-        # mean is either zeros depending on nothing or a linear layer
-        if mean_strategy is MeanStrategy.ZERO:
-            self.mu_head = ZeroNetwork((mixture_components,))
-        else:
-            self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
+        # Mean is always a linear layer, even for "ZERO" strategy.  The ZERO adjustment comes later after mixing.
+        self.mu_head = torch.nn.Linear(feature_dimension, mixture_components)
 
         # sigma_inv is a linear layer (the sign of sigma_inv is irrelevant).
         self.sigma_inv_head = torch.nn.Linear(feature_dimension, mixture_components)

@@ -2,7 +2,8 @@ import pytest
 
 import torch
 
-import deep_volatility_models.architecture as architecture
+from deep_volatility_models import architecture
+from deep_volatility_models import mixture_model_stats
 
 
 logsoftmax = torch.nn.LogSoftmax(dim=1)
@@ -13,6 +14,7 @@ WINDOW_SIZE = 16
 NOISE_DIM = 77
 EMBEDDING_SYMBOLS = 9
 EXTRA_MIXING_LAYERS = 0
+EPS = 1e-6
 
 EST = architecture.MeanStrategy.ESTIMATE
 RN = architecture.MeanStrategy.RISK_NEUTRAL
@@ -305,21 +307,25 @@ def test_deep_volatility_model(
             if is_mixture:
                 log_p_u, mu_u, sigma_inv_u = output_u
                 log_p, mu, sigma_inv, latents = output
-                log_p_e, mu_e, sigma_inv_e, latents_e = output
-                assert mu_u.shape == (BATCH_SIZE, mixture_components, output_symbols)
-                assert sigma_inv_u.shape == (
+                log_p_e, mu_e, sigma_inv_e, latents_e = output_e
+                assert sigma_inv.shape == (
                     BATCH_SIZE,
                     mixture_components,
                     output_symbols,
                     input_symbols,
                 )
+                assert mu.shape == sigma_inv.shape[:3]
+                assert log_p.shape == sigma_inv.shape[:2]
+
+                assert log_p.shape == log_p_u.shape
+                assert log_p.shape == log_p_e.shape
             else:
                 mu_u, sigma_inv_u = output_u
                 mu, sigma_inv, latents = output
                 mu_e, sigma_inv_e, latents_e = output
                 log_p_u = log_p = log_p_e = None
-                assert mu_u.shape == (BATCH_SIZE, output_symbols)
-                assert sigma_inv_u.shape == (BATCH_SIZE, output_symbols, input_symbols)
+                assert sigma_inv.shape == (BATCH_SIZE, output_symbols, input_symbols)
+                assert mu.shape == sigma_inv.shape[:2]
 
             assert latents_u.shape == (BATCH_SIZE, FEATURE_DIMENSION)
 
@@ -331,13 +337,26 @@ def test_deep_volatility_model(
             assert sigma_inv.shape == sigma_inv_e.shape
             assert latents.shape == latents_e.shape
 
+            # Confirm that the window_size property returns the correct size:
+            assert volatility_model.window_size == WINDOW_SIZE
+
             if is_mixture:
                 assert log_p_u.shape == (BATCH_SIZE, mixture_components)
                 assert log_p.shape == log_p_u.shape
                 assert log_p.shape == log_p_e.shape
 
-            # Confirm that the window_size property returns the correct size:
-            assert volatility_model.window_size == WINDOW_SIZE
+                # Make sure the probabilities for a mixture sum to approximately 1.
+                summed_p = torch.sum(torch.exp(log_p), dim=1)
+                assert all(torch.abs(summed_p - 1.0) < EPS)
+
+            if mean_strategy is ZERO and not is_mixture:
+                assert torch.norm(mu) == 0.0
+
+            if mean_strategy is ZERO and is_mixture:
+                mu_c = mixture_model_stats.multivariate_combine_metrics(
+                    torch.exp(log_p), mu, sigma_inv
+                )[0]
+                assert torch.norm(mu_c) < EPS * torch.norm(mu)
 
 
 @pytest.mark.parametrize(
