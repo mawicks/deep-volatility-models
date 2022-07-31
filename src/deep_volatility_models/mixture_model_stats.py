@@ -321,12 +321,7 @@ def multivariate_combine_metrics(p, mu, sigma_inv):
     #  should be no more than the number of columns
 
     inverse_covariance = torch.matmul(sigma_inv, torch.transpose(sigma_inv, 2, 3))
-    try:
-        covariance = torch.inverse(inverse_covariance)
-    except Exception as e:
-        print(e)
-        covariance = torch.zeros(inverse_covariance.shape)
-
+    covariance = torch.inverse(inverse_covariance)
     composite_mean = torch.sum(p.unsqueeze(2).expand(mu.shape) * mu, dim=1)
 
     # Composite covariance comes from the shifted component means and

@@ -191,7 +191,7 @@ def test_time_series_features(
         (MV, EST, 9, None, True, 5, 7, True, False),
         (MV, EST, 9, 9, True, 5, 7, True, False),  # Specifying output symbol dim
         (MV, EST, 9, 8, True, 5, 7, True, False),  # Output < input symbols
-        (MV, ZERO, 3, 2, True, 5, 7, True, False),  # Zero mean with output < input
+        (MV, ZERO, 8, 8, True, 5, 7, True, False),  # Zero mean with output < input
         (MV, RN, 9, 8, True, 5, 7, True, True),  # Risk-neutral (ValueError)
         (MV, EST, 9, None, True, 5, 7, False, False),  # No batch norm
     ],
