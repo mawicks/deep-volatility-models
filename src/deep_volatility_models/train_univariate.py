@@ -172,8 +172,8 @@ def load_existing_model(existing_model, symbols):
     model = torch.load(existing_model)
     # Dump the old wrapper and keep only the network and the embeddings
     # We'll create a new wrapper
-    model_network = model.network
-    embeddings = model.embedding
+    model_network = model.network.model
+    embeddings = model.network.embedding
     encoding = model.encoding
 
     # If there are new symbols since the previous model was trained,
@@ -182,7 +182,7 @@ def load_existing_model(existing_model, symbols):
     # better than a random initialization with using a pre-trained
     # model
 
-    new_symbols = set(symbols).difference(set(embeddings.keys()))
+    new_symbols = set(symbols).difference(set(encoding.keys()))
 
     if len(new_symbols) > 0:
         # Extend the encoding for any symbols unknown to the pre-loaded model
@@ -206,6 +206,7 @@ def load_existing_model(existing_model, symbols):
             (embedding_parameters, new_embeddings), dim=0
         )
 
+    logging.info("Using existing model")
     return model_network, embeddings, encoding
 
 
@@ -541,7 +542,7 @@ def run(
         eps=ADAM_EPSILON,
     )
 
-    if use_mixture:
+    if model.is_mixture:
         loss_function = make_mixture_loss_function()
         validation_batch_callback = make_mixture_validation_batch_logger()
     else:
@@ -553,6 +554,7 @@ def run(
         model_file, only_embeddings, model, encoding, symbols
     )
 
+    logging.info("Starting training loop.")
     best_epoch, best_validation_loss, best_model = training.train(
         model=model,
         loss_function=loss_function,

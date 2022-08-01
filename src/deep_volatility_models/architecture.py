@@ -1245,4 +1245,5 @@ class ModelWithEmbedding(torch.nn.Module):
         """
         predictors, encoding = predictors_plus_encoding
         embeddings = self.embedding(encoding)
+
         return self.model((predictors, embeddings))
