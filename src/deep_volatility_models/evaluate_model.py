@@ -31,18 +31,19 @@ from deep_volatility_models import time_series_datasets
 pd.set_option("display.width", None)
 pd.set_option("display.max_columns", None)
 pd.set_option("display.min_rows", None)
-pd.set_option("display.max_rows", 1500)
+pd.set_option("display.max_rows", 10)
 
 # Configure external packages and run()
 logging.basicConfig(format="%(levelname)s:%(message)s", level=logging.INFO, force=True)
 
 # Torch configuration
 torch.set_printoptions(
-    precision=4, threshold=None, edgeitems=None, linewidth=None, profile="short"
+    precision=4, threshold=20, edgeitems=3, linewidth=None, profile="short"
 )
 
 ANNUAL_TRADING_DAYS = 252.0
-ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
+#  ROOT_PATH = os.path.dirname(os.path.realpath(__file__))
+ROOT_PATH = "."
 
 TIME_SAMPLES = 98
 
@@ -65,11 +66,9 @@ def simulate(model, symbol, window, current_price, simulations):
         model, window, TIME_SAMPLES, simulations
     )
 
-    logging.info(f"{symbol} simulated_returns]: {simulated_returns}")
-
     historic_returns = np.exp(np.cumsum(window.squeeze(1).squeeze(0).numpy()))
     simulated_returns_many = simulated_returns_many.squeeze(1).squeeze(0).numpy()
-    logging.info(f"mean return: {np.mean(simulated_returns_many)}")
+    logging.info(f"mean simulated return: {np.mean(simulated_returns_many)}")
     sample_index = list(
         range(
             len(historic_returns) - 1,
@@ -116,23 +115,18 @@ def simulate(model, symbol, window, current_price, simulations):
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
     current_aspect = (xlim[1] - xlim[0]) / (ylim[1] - ylim[0])
-    print(xlim)
-    print(ylim)
-    print("current_aspect: ", current_aspect)
     ax.set_aspect(0.5 * current_aspect)
     plt.savefig(f"model_evaluation_{symbol}@2x.png", dpi=200)
     plt.show()
 
 
-def do_one_symbol(
-    symbol,
-    model,
-    refresh,
-    simulations,
-):
+def do_one_symbol(symbol, model, refresh, simulations, start_date, end_date):
     logging.info(f"symbol: {symbol.upper()}")
-    logging.info(f"model: {model}")
+    # logging.info(f"model: {model}") - Is having this useful?
     logging.info(f"refresh: {refresh}")
+    logging.info(f"simulations: {simulations}")
+    logging.info(f"start date: {start_date}")
+    logging.info(f"end date: {end_date}")
 
     window_size = model.network.window_size
 
@@ -155,6 +149,39 @@ def do_one_symbol(
     # Since we pass just one symbol rather than a list, use
     # next to grab the first (symbol, dataframe) pair, then [1] to grab the data.
     symbol_history = next(history_loader(symbol))[1]
+
+    # Start date represents the date of the first prediction. In other
+    # words, all points in the window are before that date.  Grab
+    # `window_size` points prior to that date which will be used for
+    # the prediction.
+
+    # Note: start_date and end_date represent the first and last dates
+    # where we have both a prediction and a return value for
+    # validating the prediction.  The first prediction will be for
+    # start_date but will be based on a full window of history prior
+    # to and not including start_date.  When we make predictions using
+    # all of this data the first prediction will be for start_date.
+    # The last prediction will be for the first business day after
+    # end_date.  This will require data up to and including
+    # end_date. This is one more prediction than we need for
+    # validation.  This prediction will automatically be dropped by a
+    # merge below because there is no in-window historical data to
+    # compare it to.  We will print this prediction for reference
+    # before the merge.
+
+    if start_date:
+        start_position = symbol_history.index.get_loc(start_date) - window_size
+    else:
+        start_position = 0
+    if end_date:
+        end_position = symbol_history.index.get_loc(end_date) + 1
+    else:
+        end_position = None
+    symbol_history = symbol_history.iloc[start_position:end_position]
+    print(symbol_history)
+
+    logging.info(f"symbol history:\n{symbol_history}")
+
     current_price = symbol_history.close[-1]
     windowed_returns = time_series_datasets.RollingWindow(
         symbol_history.log_return,
@@ -167,18 +194,29 @@ def do_one_symbol(
     simulate(model.network, symbol, windowed_returns[-1], current_price, simulations)
 
     with torch.no_grad():
-
-        windows = torch.stack(tuple(windowed_returns), dim=0)
+        # Discard the last windowed_return because it would make a
+        # prediction beyond end_date.  We're only interested in
+        # predictions that we can compare to actual returns.
+        windows = torch.stack(tuple(windowed_returns)[:-1], dim=0)
         logging.debug(f"{symbol} windows: {windows.shape}")
 
-        dates = symbol_history.index[window_size - 1 :]
-        logging.info(f"last date is {dates[-1]}")
+        # First prediction date is first date following the first window.
+        # Last prediction date is the date of the last data point.
+        # These are the dates for which we make predictions.
+        prediction_dates = symbol_history.index[window_size:]
+        ar = symbol_history.loc[prediction_dates].log_return
+        actual_returns = torch.tensor(ar, dtype=torch.float).unsqueeze(1)
+
+        print("actual_returns on prediction dates:\n", actual_returns)
 
         if model.network.is_mixture:
             log_p, mu, sigma_inv = model.network(windows)[:3]
             p = torch.exp(log_p)
+            ll = mixture_model_stats.univariate_log_likelihood(
+                actual_returns, log_p, mu, sigma_inv
+            )
 
-            logging.info(f"p: {p}")
+            logging.debug(f"p: {p}")
             logging.debug(f"mu: {mu}")
             logging.debug(f"sigma_inv: {sigma_inv}")
 
@@ -187,12 +225,15 @@ def do_one_symbol(
             )
         else:
             mu, sigma_inv = model.network(windows)[:2]
+            ll = loss_functions.univariate_los_likelihood(
+                actual_returns, log_p, mu, sigma_inv
+            )
 
             logging.debug(f"mu: {mu}")
             logging.debug(f"sigma_inv: {sigma_inv}")
 
-            sigma = torch.inverse(sigma_inv)
             mean = mu.squeeze(1)
+            sigma = torch.inverse(sigma_inv)
             variance = (sigma.squeeze(2).squeeze(1)) ** 2
             p = torch.ones((mean.shape[0],))
 
@@ -206,6 +247,11 @@ def do_one_symbol(
         logging.debug(f"annual return: {annual_return}")
         logging.debug(f"annual volatility: {volatility}")
 
+        logging.info(
+            f"*** Validation range: {prediction_dates[0].date()} to {prediction_dates[-1].date()} ***"
+        )
+        logging.info(f"*** mean log likelihood: {round(float(torch.mean(ll)),4)} ***")
+
         df = pd.DataFrame(
             {
                 "pred_volatility": volatility,
@@ -217,12 +263,11 @@ def do_one_symbol(
                 "mu": map(lambda x: x.numpy(), mu),
                 "sigma_inv": map(lambda x: x.numpy(), sigma_inv),
             },
-            index=dates,
+            index=prediction_dates,
         )
 
         df = df.merge(
             symbol_history,
-            how="left",
             left_index=True,
             right_index=True,
         )
@@ -246,7 +291,7 @@ def do_one_symbol(
         return return_df
 
 
-def run(model, symbol, simulations):
+def run(model, symbol, simulations, start_date=None, end_date=None):
     wrapped_model = torch.load(model)
     single_symbol_model_factory = embedding_models.SingleSymbolModelFactory(
         wrapped_model.encoding, wrapped_model
@@ -258,7 +303,14 @@ def run(model, symbol, simulations):
 
     dataframes = {}
     for s in symbols_to_process:
-        df = do_one_symbol(s, single_symbol_model_factory(s.upper()), True, simulations)
+        df = do_one_symbol(
+            s,
+            single_symbol_model_factory(s.upper()),
+            True,
+            simulations,
+            start_date,
+            end_date,
+        )
         dataframes[s] = df
 
     combined_df = pd.concat(
@@ -284,14 +336,14 @@ def run(model, symbol, simulations):
     "--start-date",
     type=click.DateTime(formats=["%Y-%m-%d"]),
     show_default=True,
-    help="Start date",
+    help="Date of first return prediction (must be a business day)",
 )
 @click.option(
     "--end-date",
     type=click.DateTime(formats=["%Y-%m-%d"]),
     default=None,
     show_default=True,
-    help="End date",
+    help="Date of last return prediction (must be a business day)",
 )
 @click.option(
     "--simulations",
@@ -312,15 +364,7 @@ def run_cli(
     logging.info(f"start_date: {start_date}")
     logging.info(f"simulations: {simulations}")
 
-    df = run(model, symbol, simulations)
-
-    if start_date:
-        start_date = start_date.date()
-
-    if end_date:
-        end_date = end_date.date()
-
-    df = df.loc[start_date:end_date]
+    df = run(model, symbol, simulations, start_date, end_date)
 
     logging.info(df)
     df.plot(subplots=True)

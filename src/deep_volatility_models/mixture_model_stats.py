@@ -36,6 +36,15 @@ def univariate_log_likelihood(
     the number of symbols are required to be 1.
 
     """
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x, dtype=torch.float)
+    if not isinstance(log_p, torch.Tensor):
+        log_p = torch.tensor(log_p, dtype=torch.float)
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.tensor(mu, dtype=torch.float)
+    if not isinstance(sigma_inv, torch.Tensor):
+        sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
+
     mb_size, mixture_components, symbols = sigma_inv.shape[:3]
     if (
         x.shape != (mb_size, symbols)
@@ -251,7 +260,7 @@ def univariate_combine_metrics(p, mu, sigma_inv):
 
     if symbols != 1:
         raise ValueError(
-            f"Symbol dim is {symbol}. This code requires the number of symbols to be 1"
+            f"Symbol dim is {symbols}. This code requires the number of symbols to be 1"
         )
 
     # Drop the symbol dimension on mu and sigma_inv which is known to be 1

@@ -35,6 +35,13 @@ def univariate_log_likelihood(
        associated with the number of symbols are required to be 1.
 
     """
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x, dtype=torch.float)
+    if not isinstance(mu, torch.Tensor):
+        mu = torch.tensor(mu, dtype=torch.float)
+    if not isinstance(sigma_inv, torch.Tensor):
+        sigma_inv = torch.tensor(sigma_inv, dtype=torch.float)
+
     mb_size, symbols = sigma_inv.shape[:2]
     if (
         x.shape != (mb_size, symbols)
