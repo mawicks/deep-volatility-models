@@ -270,9 +270,13 @@ def prepare_data(
         symbol_dataset = time_series_datasets.ContextWindowAndTarget(
             windowed_returns, 1
         )
+        print(len(symbol_dataset))
         symbol_dataset_with_encoding = (
             time_series_datasets.ContextWindowEncodingAndTarget(
-                i, symbol_dataset, device=device
+                i,
+                symbol_dataset,
+                symbol_weight=1.0 / len(symbol_dataset),
+                device=device,
             )
         )
 

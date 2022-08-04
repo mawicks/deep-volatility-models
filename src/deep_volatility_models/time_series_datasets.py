@@ -237,6 +237,7 @@ class ContextWindowEncodingAndTarget(torch.utils.data.Dataset):
         self,
         symbol_encoding: int,
         symbol_history_dataset: ContextWindowAndTarget,
+        symbol_weight=1.0,
         device=None,
     ):
         self.__symbol_encoding = torch.tensor(symbol_encoding)
@@ -244,6 +245,7 @@ class ContextWindowEncodingAndTarget(torch.utils.data.Dataset):
             self.__symbol_encoding = self.__symbol_encoding.to(device)
         self.__symbol_history_dataset = symbol_history_dataset
         self.__device = device
+        self.__symbol_weight = symbol_weight
 
     def __len__(self) -> int:
         return len(self.__symbol_history_dataset)
@@ -253,4 +255,4 @@ class ContextWindowEncodingAndTarget(torch.utils.data.Dataset):
         if self.__device is not None:
             window = window.to(self.__device)
             target = target.to(self.__device)
-        return (window, self.__symbol_encoding), target
+        return (window, self.__symbol_encoding), target, self.__symbol_weight

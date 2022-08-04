@@ -50,7 +50,7 @@ def _do_batches(
     model.train(training)
     batch_losses = []
 
-    for batch, (predictors, target) in enumerate(data_loader):
+    for batch, (predictors, target, weight) in enumerate(data_loader):
         model_output = model(predictors)
         batch_loss = loss_function(model_output, target)
         batch_losses.append(float(batch_loss))
