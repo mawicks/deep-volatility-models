@@ -23,6 +23,7 @@ plt.style.use("ggplot")
 from deep_volatility_models import data_sources
 from deep_volatility_models import embedding_models
 from deep_volatility_models import sample
+from deep_volatility_models import loss_functions
 from deep_volatility_models import mixture_model_stats
 from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
@@ -225,9 +226,7 @@ def do_one_symbol(symbol, model, refresh, simulations, start_date, end_date):
             )
         else:
             mu, sigma_inv = model.network(windows)[:2]
-            ll = loss_functions.univariate_los_likelihood(
-                actual_returns, log_p, mu, sigma_inv
-            )
+            ll = loss_functions.univariate_log_likelihood(actual_returns, mu, sigma_inv)
 
             logging.debug(f"mu: {mu}")
             logging.debug(f"sigma_inv: {sigma_inv}")

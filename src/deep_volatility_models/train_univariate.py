@@ -42,12 +42,14 @@ MEAN_STRATEGIES = {
 
 TRAIN_FRACTION = 0.80
 DEFAULT_SEED = 24  # Previously 42
+RANDOM_SPLIT_SEED = 1701
 
 EPOCHS = 1000  # 30000
 EARLY_TERMINATION = 100  # Was 1000
 
 USE_MIXTURE = False
 USE_DEV_MODELS = False
+DEFAULT_MIXING_LAYERS = 0
 
 RISK_NEUTRAL_PARAMETERS = True
 if RISK_NEUTRAL_PARAMETERS:  # These are the values for the univariate non-mixture model
@@ -103,6 +105,7 @@ def create_new_model(
     mean_strategy=MEAN_STRATEGIES[RISK_NEUTRAL],
     use_mixture=USE_MIXTURE,
     use_dev_models=USE_DEV_MODELS,
+    extra_mixing_layers=DEFAULT_MIXING_LAYERS,
 ):
     if use_dev_models:
         network = architecture.DeepVolatilityModel(
@@ -118,6 +121,7 @@ def create_new_model(
             activation=ACTIVATION,
             dropout=dropout,
             use_batch_norm=use_batch_norm,
+            extra_mixing_layers=extra_mixing_layers,
         )
     elif use_mixture:
         network = architecture.MixtureModel(
@@ -221,6 +225,8 @@ def prepare_data(
     start_date: Union[dt.date, None] = None,
     end_date: Union[dt.date, None] = None,
 ):
+    generator = torch.Generator().manual_seed(RANDOM_SPLIT_SEED)
+
     # Refresh historical data
     logging.info("Reading historical data")
     splits_by_symbol = {}
@@ -239,7 +245,7 @@ def prepare_data(
 
     skip = 256 - window_size
 
-    for s in symbol_list:
+    for s in sorted(symbol_list):
         logging.info(f"Reading {s}")
         i = encoding[s]
 
@@ -273,7 +279,7 @@ def prepare_data(
         train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
         lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
         train, test = torch.utils.data.random_split(
-            symbol_dataset_with_encoding, lengths
+            symbol_dataset_with_encoding, lengths, generator=generator
         )
         splits_by_symbol[s] = {"train": train, "test": test}
 
@@ -375,7 +381,9 @@ def make_validation_batch_logger():
     return log_epoch
 
 
-def make_save_model(model_file, only_embeddings, model, encoding, symbols):
+def make_save_model(
+    model_file, only_embeddings, model, encoding, symbols, start_date, end_date
+):
     def save_model(epoch, epoch_loss, prefix=""):
         wrapped_model = model_wrappers.StockModel(
             symbols=symbols,
@@ -384,6 +392,8 @@ def make_save_model(model_file, only_embeddings, model, encoding, symbols):
             epochs=epoch,
             date=dt.datetime.now(),
             loss=epoch_loss,
+            training_data_start_date=start_date,
+            training_data_end_date=end_date,
         )
 
         torch.save(wrapped_model, f"{model_file}")
@@ -392,9 +402,11 @@ def make_save_model(model_file, only_embeddings, model, encoding, symbols):
 
 
 def make_loss_improvement_callback(
-    model_file, only_embeddings, model, encoding, symbols
+    model_file, only_embeddings, model, encoding, symbols, start_date, end_date
 ):
-    save_model = make_save_model(model_file, only_embeddings, model, encoding, symbols)
+    save_model = make_save_model(
+        model_file, only_embeddings, model, encoding, symbols, start_date, end_date
+    )
 
     def model_improvement_callback(epoch, epoch_loss):
         save_model(epoch, epoch_loss)
@@ -436,6 +448,7 @@ def run(
     start_date=None,
     end_date=None,
     use_dev_models=USE_DEV_MODELS,
+    extra_mixing_layers=0,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -464,6 +477,7 @@ def run(
     logging.info(f"Start date: {start_date}")
     logging.info(f"End date: {end_date}")
     logging.info(f"Use dev models: {use_dev_models}")
+    logging.info(f"Extra mixing layers: {extra_mixing_layers}")
 
     model_network = embeddings = None
     if existing_model:
@@ -517,6 +531,7 @@ def run(
             dropout=dropout,
             mean_strategy=mean_strategy,
             use_dev_models=use_dev_models,
+            extra_mixing_layers=extra_mixing_layers,
         )
         logging.info("Initialized new model")
 
@@ -534,13 +549,20 @@ def run(
     model = architecture.ModelWithEmbedding(model_network, embeddings)
     model.to(device)
 
-    optim = torch.optim.Adam(
+    sgd_optim = torch.optim.SGD(
+        parameters,
+        lr=learning_rate,
+        weight_decay=weight_decay,
+        momentum=0.0,
+    )
+    adam_optim = torch.optim.Adam(
         parameters,
         lr=learning_rate,
         betas=(beta1, beta2),
         weight_decay=weight_decay,
         eps=ADAM_EPSILON,
     )
+    optim = adam_optim
 
     if model.is_mixture:
         loss_function = make_mixture_loss_function()
@@ -551,7 +573,7 @@ def run(
 
     epoch_callback = make_epoch_callback(model)
     loss_improvement_callback = make_loss_improvement_callback(
-        model_file, only_embeddings, model, encoding, symbols
+        model_file, only_embeddings, model, encoding, symbols, start_date, end_date
     )
 
     logging.info("Starting training loop.")
@@ -667,7 +689,6 @@ def run(
 )
 @click.option(
     "--end-date",
-    default=str(dt.date.today()),
     show_default=True,
     type=click.DateTime(formats=["%Y-%m-%d"]),
     help="Exclude training data on or after this date",
@@ -677,6 +698,13 @@ def run(
     is_flag=True,
     show_default=True,
     help="Use development version of models.",
+)
+@click.option(
+    "--extra-mixing-layers",
+    type=int,
+    default=DEFAULT_MIXING_LAYERS,
+    show_default=True,
+    help="Number of additional layers to blend exogenous and time series latents.",
 )
 def main_cli(
     use_hsmd,
@@ -702,6 +730,7 @@ def main_cli(
     start_date,
     end_date,
     use_dev_models,
+    extra_mixing_layers,
 ):
 
     if start_date:
@@ -734,6 +763,7 @@ def main_cli(
         start_date=start_date,
         end_date=end_date,
         use_dev_models=use_dev_models,
+        extra_mixing_layers=extra_mixing_layers,
     )
 
 
