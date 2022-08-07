@@ -66,6 +66,8 @@ def prepare_data(
 # where h is intended to be the covariance estimate
 # f and g are lower triangular.
 
+DECAY = 0.30
+
 
 def initialize_parameters(n, observations):
     std = torch.std(observations, dim=0)
@@ -80,8 +82,8 @@ def initialize_parameters(n, observations):
 
     w = make_one(0.01)
 
-    f = 0.90 * torch.eye(n)
-    g = 0.10 * torch.eye(n)
+    f = (1.0 - DECAY) * torch.eye(n)
+    g = DECAY * torch.eye(n)
     h0 = torch.diag(std)
 
     print(h0)
@@ -199,7 +201,25 @@ def run(
 
     parameters = [f, g, w, h0]
 
-    optim = torch.optim.LBFGS(parameters, max_iter=2000, lr=0.06)
+    optim = torch.optim.LBFGS(parameters, max_iter=2000, lr=0.10)
+
+    def simulate(observations, f, g, w, h0):
+        hk = h0
+        h_sequence = []
+        for k, o in enumerate(observations):
+            # Store the current hk before predicting next one
+            h_sequence.append(hk)
+            t1 = hk @ f
+            t2 = torch.diag(o) * g
+            # h_squared = h0 @ h0.T
+            # h_squared = t1 @ t1.T + t2 @ t2.T + w @ w.T
+            h_squared = t1 @ t1.T + t2 @ t2.T
+            hk = torch.linalg.cholesky(
+                h_squared + w @ w.T + EPS * torch.eye(h_squared.shape[0])
+            )
+
+        h = torch.stack(h_sequence)
+        return h
 
     def mean_log_likelihood(observations, f, g, w, h0):
         # Running through a tri will force autograd to ignore any upper entries
@@ -213,25 +233,12 @@ def run(
         print("likelihood: w:\n", w)
         print("likelihood: h0:\n", h0)
 
-        hk = h0
-        h_sequence = []
-        for k, o in enumerate(observations):
-            # Store the current hk before predicting next one
-            h_sequence.append(hk)
-            t1 = hk @ f
-            t2 = torch.diag(o) * g
-            # h_squared = h0 @ h0.T
-            # h_squared = t1 @ t1.T + t2 @ t2.T + w @ w.T
-            h_squared = t1 @ t1.T + t2 @ t2.T
-            hk = torch.linalg.cholesky(h_squared + EPS * torch.eye(h_squared.shape[0]))
-
-        h = torch.stack(h_sequence)
+        h = simulate(observations, f, g, w, h0)
 
         ll = conditional_log_likelihoods(observations, h, distribution)
         mean_ll = torch.mean(ll)
 
         print(f"mean_ll: {mean_ll}")
-        print(f"h:  {h}")
 
         return mean_ll
 
@@ -241,9 +248,21 @@ def run(
         loss.backward()
         return loss
 
-    logging.info("Starting training loop.")
+    logging.info("Starting optimization.")
 
     optim.step(loss_closure)
+
+    logging.info("Finished")
+
+    # Simulate one more time with optimal parameters.
+    h = simulate(observations, f, g, w, h0)
+
+    logging.info(f"Transformation estimates:\n{h}")
+
+    logging.info(f"Initial estimate h0:\n{h0}")
+    logging.info(f"AR matrix f:\n{f}")
+    logging.info(f"MA matrix g:\n{g}")
+    logging.info(f"Constant matrix w:\n{w}")
 
 
 @click.command()
