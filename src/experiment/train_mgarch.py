@@ -17,9 +17,10 @@ from deep_volatility_models import data_sources
 from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
-EPS = 1e-6
+EPS = 1e-10
+LEARNING_RATE = 0.75
 DEFAULT_SEED = 42
-MAX_ITERATIONS = 100
+MAX_ITERATIONS = 10000
 DEBUG = False
 
 logging.basicConfig(
@@ -201,7 +202,12 @@ def run(
 
     parameters = [f, g, w, h0]
 
-    optim = torch.optim.LBFGS(parameters, max_iter=2000, lr=0.10)
+    optim = torch.optim.LBFGS(
+        parameters,
+        max_iter=MAX_ITERATIONS,
+        lr=LEARNING_RATE,
+        line_search_fn="strong_wolfe",
+    )
 
     def simulate(observations, f, g, w, h0):
         hk = h0
@@ -210,13 +216,15 @@ def run(
             # Store the current hk before predicting next one
             h_sequence.append(hk)
             t1 = hk @ f
-            t2 = torch.diag(o) * g
-            # h_squared = h0 @ h0.T
-            # h_squared = t1 @ t1.T + t2 @ t2.T + w @ w.T
-            h_squared = t1 @ t1.T + t2 @ t2.T
-            hk = torch.linalg.cholesky(
-                h_squared + w @ w.T + EPS * torch.eye(h_squared.shape[0])
-            )
+            t2 = torch.diag(o) @ g
+            h_squared = t1 @ t1.T + t2 @ t2.T + w @ w.T
+            try:
+                hk = torch.linalg.cholesky(
+                    h_squared + EPS * torch.eye(h_squared.shape[0])
+                )
+            except Exception as e:
+                print(e)
+                return None
 
         h = torch.stack(h_sequence)
         return h
@@ -235,8 +243,11 @@ def run(
 
         h = simulate(observations, f, g, w, h0)
 
-        ll = conditional_log_likelihoods(observations, h, distribution)
-        mean_ll = torch.mean(ll)
+        if h is not None:
+            ll = conditional_log_likelihoods(observations, h, distribution)
+            mean_ll = torch.mean(ll)
+        else:
+            mean_ll = torch.tensor(float("-inf"), requires_grad=True)
 
         print(f"mean_ll: {mean_ll}")
 
@@ -257,12 +268,23 @@ def run(
     # Simulate one more time with optimal parameters.
     h = simulate(observations, f, g, w, h0)
 
+    # Compute the final loss
+    ll = torch.mean(conditional_log_likelihoods(observations, h, distribution))
+
     logging.info(f"Transformation estimates:\n{h}")
 
     logging.info(f"Initial estimate h0:\n{h0}")
     logging.info(f"AR matrix f:\n{f}")
     logging.info(f"MA matrix g:\n{g}")
     logging.info(f"Constant matrix w:\n{w}")
+
+    logging.info(f"**** Final likelihood (per sample): {ll:.4f} ****")
+
+    logging.info("Gradients: ")
+    logging.info(f"f.grad:\n{f.grad}")
+    logging.info(f"g.grad:\n{g.grad}")
+    logging.info(f"h0.grad:\n{h0.grad}")
+    logging.info(f"w.grad:\n{w.grad}")
 
 
 @click.command()
