@@ -17,11 +17,16 @@ from deep_volatility_models import data_sources
 from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
-EPS = 1e-10
-LEARNING_RATE = 0.75
-DEFAULT_SEED = 42
-MAX_ITERATIONS = 10000
 DEBUG = False
+
+EPS = 1e-10
+IID_MODEL = False
+LEARNING_RATE = 0.25
+MAX_ITERATIONS = 20
+MAX_CLAMP = 1e10
+MIN_CLAMP = -MAX_CLAMP
+DEFAULT_SEED = 42
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,8 +61,8 @@ def prepare_data(
 
     symbol_list = sorted(symbol_list)
     full_history = combiner(history_loader(symbol_list))
-
     training_data = full_history.loc[start_date:end_date, (symbol_list, "log_return")]
+    print(training_data.columns)
 
     return training_data
 
@@ -81,25 +86,28 @@ def initialize_parameters(n, observations):
         m.requires_grad = requires_grad
         return m
 
-    w = make_one(0.01)
-
+    w = make_one(0.01, False)
     f = (1.0 - DECAY) * torch.eye(n)
+    d = (1.0 - DECAY) * torch.eye(n)
     g = DECAY * torch.eye(n)
     h0 = torch.diag(std)
 
-    print(h0)
+    if IID_MODEL:
+        w = torch.diag(torch.diag(w))
+        f = torch.diag(torch.diag(f))
+        d = torch.diag(torch.diag(f))
+        g = torch.diag(torch.diag(g))
+        h0 = torch.diag(torch.diag(h0))
 
-    for t in [f, g, w, h0]:
+    for t in [f, g, w, h0, d]:
         t.requires_grad = True
 
-    return f, g, w, h0
+    return f, g, w, h0, d
 
 
 distribution = torch.distributions.normal.Normal(
     loc=torch.tensor(0.0), scale=torch.tensor(1.0)
 )
-
-print("lll@1.0: ", distribution.log_prob(torch.tensor(1.0)))
 
 
 def fix_negative_determinant(m):
@@ -134,7 +142,7 @@ def conditional_log_likelihoods(observations, transformations, distribution):
     # Do the multiplication, then drop the extra dimension
     e = (inv_t @ observations).squeeze(2)
 
-    print("e: \n", e)
+    logging.debug(f"e: \n{e}")
 
     # Compute the log likelihoods on the innovations
     log_pdf = torch.sum(distribution.log_prob(e), dim=1)
@@ -145,6 +153,70 @@ def conditional_log_likelihoods(observations, transformations, distribution):
 
     ll = log_pdf - log_det
     return ll
+
+
+def simulate(observations, f, g, w, h0, d):
+    hk = h0
+    h_sequence = []
+
+    for k, o in enumerate(observations):
+        # Store the current hk before predicting next one
+        h_sequence.append(hk)
+
+        # While probing the parameter space an unstable value for `f` may be tested.
+        # Clamp hk to prevent it from overflowing.
+        # t1 = hk @ f
+        t1 = f @ hk
+        t1 = torch.clamp(t1, min=MIN_CLAMP, max=MAX_CLAMP)
+        t2 = (g @ o).unsqueeze(1)
+        covariance = t1 @ t1.T + t2 @ t2.T + w @ w.T
+        try:
+            hk = torch.linalg.cholesky(
+                covariance
+                + EPS * torch.max(covariance) * torch.eye(covariance.shape[0])
+            )
+        except Exception as e:
+            print(e)
+            print(f"hk:\n{hk}")
+            print(f"t1:\n{t1}")
+            print(f"t2:\n{t2}")
+            print(f"w:\n{w}")
+            print(f"d:\n{d}")
+            raise e
+
+    h = torch.stack(h_sequence)
+    return h
+
+
+def mean_log_likelihood(observations, f, g, w, h0, d):
+    # Running through a tri will force autograd to ignore any upper entries
+    f = torch.tril(f)
+    d = torch.tril(d)
+    g = torch.tril(g)
+    w = torch.tril(w)
+    h0 = torch.tril(h0)
+
+    if IID_MODEL:
+        w = torch.diag(torch.diag(w))
+        f = torch.diag(torch.diag(f))
+        d = torch.diag(torch.diag(d))
+        g = torch.diag(torch.diag(g))
+        h0 = torch.diag(torch.diag(h0))
+
+    logging.debug(f"likelihood: f:\n{f}")
+    logging.debug(f"likelihood: g:\n{g}")
+    logging.debug(f"likelihood: w:\n{w}")
+    logging.debug(f"likelihood: h0:\n{h0}")
+
+    h = simulate(observations, f, g, w, h0, d)
+
+    if h is not None:
+        ll = conditional_log_likelihoods(observations, h, distribution)
+        mean_ll = torch.mean(ll)
+    else:
+        mean_ll = torch.tensor(float("-inf"), requires_grad=True)
+
+    return mean_ll
 
 
 def run(
@@ -189,19 +261,25 @@ def run(
         eval_start_date=eval_start_date,
         eval_end_date=eval_end_date,
     )
-    print(f"training_data:\n {training_data}")
+    logging.info(f"training_data:\n {training_data}")
 
     observations = torch.tensor(training_data.values, dtype=torch.float)
-    print(f"observations:\n {observations}")
+    logging.info(f"observations:\n {observations}")
 
-    f, g, w, h0 = initialize_parameters(len(symbols), observations)
-    print(f"h0:\n{h0}")
-    print(f"f:\n{f}")
-    print(f"g:\n{g}")
-    print(f"w:\n{w}")
+    f, g, w, h0, d = initialize_parameters(len(symbols), observations)
+    logging.debug(f"h0:\n{h0}")
+    logging.debug(f"f:\n{f}")
+    logging.debug(f"g:\n{g}")
+    logging.debug(f"w:\n{w}")
+    logging.debug(f"d:\n{d}")
 
-    parameters = [f, g, w, h0]
+    def loss_closure():
+        optim.zero_grad()
+        loss = -mean_log_likelihood(observations, f, g, w, h0, d)
+        loss.backward()
+        return loss
 
+    parameters = [f, g, w, h0, d]
     optim = torch.optim.LBFGS(
         parameters,
         max_iter=MAX_ITERATIONS,
@@ -209,64 +287,48 @@ def run(
         line_search_fn="strong_wolfe",
     )
 
-    def simulate(observations, f, g, w, h0):
-        hk = h0
-        h_sequence = []
-        for k, o in enumerate(observations):
-            # Store the current hk before predicting next one
-            h_sequence.append(hk)
-            t1 = hk @ f
-            t2 = torch.diag(o) @ g
-            h_squared = t1 @ t1.T + t2 @ t2.T + w @ w.T
-            try:
-                hk = torch.linalg.cholesky(
-                    h_squared + EPS * torch.eye(h_squared.shape[0])
-                )
-            except Exception as e:
-                print(e)
-                return None
-
-        h = torch.stack(h_sequence)
-        return h
-
-    def mean_log_likelihood(observations, f, g, w, h0):
-        # Running through a tri will force autograd to ignore any upper entries
-        f = torch.tril(f)
-        g = torch.tril(g)
-        w = torch.tril(w)
-        h0 = torch.tril(h0)
-
-        print("likelihood: f:\n", f)
-        print("likelihood: g:\n", g)
-        print("likelihood: w:\n", w)
-        print("likelihood: h0:\n", h0)
-
-        h = simulate(observations, f, g, w, h0)
-
-        if h is not None:
-            ll = conditional_log_likelihoods(observations, h, distribution)
-            mean_ll = torch.mean(ll)
-        else:
-            mean_ll = torch.tensor(float("-inf"), requires_grad=True)
-
-        print(f"mean_ll: {mean_ll}")
-
-        return mean_ll
-
-    def loss_closure():
-        optim.zero_grad()
-        loss = -mean_log_likelihood(observations, f, g, w, h0)
-        loss.backward()
-        return loss
-
     logging.info("Starting optimization.")
+    best_loss = float("inf")
+    done = False
 
-    optim.step(loss_closure)
+    while not done:
+        optim.step(loss_closure)
+        with torch.no_grad():
+            current_loss = -mean_log_likelihood(observations, f, g, w, h0, d)
+            logging.info(
+                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
+            )
+
+        if float(current_loss) < best_loss:
+            best_loss = current_loss
+        else:
+            logging.info("Stopping")
+            done = True
 
     logging.info("Finished")
 
     # Simulate one more time with optimal parameters.
-    h = simulate(observations, f, g, w, h0)
+    h = simulate(observations, f, g, w, h0, d)
+
+    # Compute some useful quantities to display and to record
+    covariance = h @ torch.transpose(h, 1, 2)
+    variance = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
+    inverse_variance = torch.diag_embed(variance ** (-1), dim1=1, dim2=2)
+    correlation = inverse_variance @ covariance @ inverse_variance
+
+    result = {
+        "transformation": h.detach().numpy(),
+        "variance": variance.detach().numpy(),
+        "covariance": covariance.detach().numpy(),
+        "correlation": correlation.detach().numpy(),
+        "training_data": training_data,
+    }
+
+    torch.save(result, "mgarch_output.pt")
+
+    print("variances:\n", variance)
+    print("correlations:\n", correlation)
+    print("transformations:\n", h)
 
     # Compute the final loss
     ll = torch.mean(conditional_log_likelihoods(observations, h, distribution))
@@ -275,16 +337,17 @@ def run(
 
     logging.info(f"Initial estimate h0:\n{h0}")
     logging.info(f"AR matrix f:\n{f}")
+    logging.info(f"2nd AR matrix d:\n{d}")
     logging.info(f"MA matrix g:\n{g}")
     logging.info(f"Constant matrix w:\n{w}")
 
     logging.info(f"**** Final likelihood (per sample): {ll:.4f} ****")
 
-    logging.info("Gradients: ")
-    logging.info(f"f.grad:\n{f.grad}")
-    logging.info(f"g.grad:\n{g.grad}")
-    logging.info(f"h0.grad:\n{h0.grad}")
-    logging.info(f"w.grad:\n{w.grad}")
+    logging.debug("Gradients: ")
+    logging.debug(f"f.grad:\n{f.grad}")
+    logging.debug(f"g.grad:\n{g.grad}")
+    logging.debug(f"h0.grad:\n{h0.grad}")
+    logging.debug(f"w.grad:\n{w.grad}")
 
 
 @click.command()
