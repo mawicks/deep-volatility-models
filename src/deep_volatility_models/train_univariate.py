@@ -224,6 +224,8 @@ def prepare_data(
     minibatch_size: int = OPT_MINIBATCH_SIZE,
     start_date: Union[dt.date, None] = None,
     end_date: Union[dt.date, None] = None,
+    eval_start_date: Union[dt.date, None] = None,
+    eval_end_date: Union[dt.date, None] = None,
 ):
     generator = torch.Generator().manual_seed(RANDOM_SPLIT_SEED)
 
@@ -253,7 +255,8 @@ def prepare_data(
         # but here we just load the single symbol of interest.  Since we expect
         # just one dataframe, grab it with next() instead of using a combiner()
         # (see stock-data.py).)
-        symbol_history = next(history_loader(s))[1].loc[start_date:end_date]
+        full_history = next(history_loader(s))[1]
+        symbol_history = full_history.loc[start_date:end_date]
         logging.info(f"symbol_history:\n {symbol_history}")
 
         # Symbol history is a combined history for all symbols.  We process it
@@ -280,11 +283,41 @@ def prepare_data(
             )
         )
 
-        train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
-        lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
-        train, test = torch.utils.data.random_split(
-            symbol_dataset_with_encoding, lengths, generator=generator
-        )
+        if eval_start_date is None:
+            train_size = int(TRAIN_FRACTION * len(symbol_dataset_with_encoding))
+            lengths = [train_size, len(symbol_dataset_with_encoding) - train_size]
+            train, test = torch.utils.data.random_split(
+                symbol_dataset_with_encoding, lengths, generator=generator
+            )
+        else:
+            start_loc = max(
+                full_history.index.get_loc(eval_start_date) - window_size, 0
+            )
+            if eval_end_date:
+                end_loc = full_history.index.get_loc(eval_end_date) + 1
+            else:
+                end_loc = None
+            eval_symbol_history = full_history.iloc[start_loc:end_loc]
+            print("eval symbol_history: \n", eval_symbol_history)
+            eval_windowed_returns = time_series_datasets.RollingWindow(
+                eval_symbol_history.log_return[skip:],
+                1 + window_size,
+                create_channel_dim=True,
+            )
+            eval_symbol_dataset = time_series_datasets.ContextWindowAndTarget(
+                eval_windowed_returns, 1
+            )
+            eval_symbol_dataset_with_encoding = (
+                time_series_datasets.ContextWindowEncodingAndTarget(
+                    i,
+                    eval_symbol_dataset,
+                    symbol_weight=1.0 / len(eval_symbol_dataset),
+                    device=device,
+                )
+            )
+            train = symbol_dataset_with_encoding
+            test = eval_symbol_dataset_with_encoding
+
         splits_by_symbol[s] = {"train": train, "test": test}
 
     train_dataset = torch.utils.data.ConcatDataset(
@@ -309,13 +342,15 @@ def prepare_data(
 
 
 def make_mixture_loss_function():
-    def loss_function(output, target):
+    def loss_function(output, target, weight=torch.tensor(1.0)):
         log_p, mu, inv_sigma = output[:3]
 
-        loss = -torch.mean(
-            mixture_model_stats.multivariate_log_likelihood(
+        loss = -torch.sum(
+            weight
+            * mixture_model_stats.multivariate_log_likelihood(
                 target.squeeze(2), log_p, mu, inv_sigma
             )
+            / torch.sum(weight)
         )
 
         if np.isnan(float(loss)):
@@ -329,12 +364,13 @@ def make_mixture_loss_function():
 
 
 def make_loss_function():
-    def loss_function(output, target):
+    def loss_function(output, target, weight=torch.tensor(1.0)):
         mu, inv_sigma = output[:2]
 
-        loss = -torch.mean(
-            loss_functions.univariate_log_likelihood(target.squeeze(2), mu, inv_sigma)
-        )
+        loss = -torch.sum(
+            weight
+            * loss_functions.univariate_log_likelihood(target.squeeze(2), mu, inv_sigma)
+        ) / torch.sum(weight)
 
         if np.isnan(float(loss)):
             logging.error("mu: ", mu)
@@ -451,6 +487,8 @@ def run(
     seed=DEFAULT_SEED,
     start_date=None,
     end_date=None,
+    eval_start_date=None,
+    eval_end_date=None,
     use_dev_models=USE_DEV_MODELS,
     extra_mixing_layers=0,
 ):
@@ -480,6 +518,8 @@ def run(
     logging.info(f"Seed: {seed}")
     logging.info(f"Start date: {start_date}")
     logging.info(f"End date: {end_date}")
+    logging.info(f"Evaluation/termination start date: {eval_start_date}")
+    logging.info(f"Evaluation/termination end date: {eval_end_date}")
     logging.info(f"Use dev models: {use_dev_models}")
     logging.info(f"Extra mixing layers: {extra_mixing_layers}")
 
@@ -506,12 +546,6 @@ def run(
 
     torch.random.manual_seed(seed)
 
-    # Do split before any random weight initialization so that any
-    # subsequent random number generator calls won't affect the split.
-    # We want the splits to be the same for different architecture
-    # parameters to provide fair comparisons of different
-    # architectures on the same split.
-
     train_loader, validation_loader = prepare_data(
         history_loader,
         symbols,
@@ -520,6 +554,8 @@ def run(
         minibatch_size=minibatch_size,
         start_date=start_date,
         end_date=end_date,
+        eval_start_date=eval_start_date,
+        eval_end_date=eval_end_date,
     )
 
     if model_network is None or embeddings is None:
@@ -689,13 +725,26 @@ def run(
     default=None,
     show_default=True,
     type=click.DateTime(formats=["%Y-%m-%d"]),
-    help="Exclude training data (returns) before this date",
+    help="First date of data used for training",
 )
 @click.option(
     "--end-date",
     show_default=True,
     type=click.DateTime(formats=["%Y-%m-%d"]),
-    help="Exclude training data on or after this date",
+    help="Final date of data used for training",
+)
+@click.option(
+    "--eval-start-date",
+    default=None,
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="First date of data used for evaluation/termination",
+)
+@click.option(
+    "--eval-end-date",
+    show_default=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Last date of data used for evaluation/termination",
 )
 @click.option(
     "--use-dev-models",
@@ -733,6 +782,8 @@ def main_cli(
     seed,
     start_date,
     end_date,
+    eval_start_date,
+    eval_end_date,
     use_dev_models,
     extra_mixing_layers,
 ):
@@ -766,6 +817,8 @@ def main_cli(
         seed=seed,
         start_date=start_date,
         end_date=end_date,
+        eval_start_date=eval_start_date,
+        eval_end_date=eval_end_date,
         use_dev_models=use_dev_models,
         extra_mixing_layers=extra_mixing_layers,
     )
