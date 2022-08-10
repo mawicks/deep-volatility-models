@@ -125,7 +125,36 @@ normal_distribution = torch.distributions.normal.Normal(
 )
 
 
-def conditional_log_likelihoods(observations, transformations, distribution):
+def marginal_conditional_log_likelihoods(observations, sigma, distribution):
+    """
+    Arguments:
+       observations: torch.Tensor of shape (n_obs, n_symbols)
+       sigma: torch.Tensor of shape (n_obs, n_symbols)
+           Contains the estimated univariate (marginal) standard deviation for each observation.
+
+       distribution: torch.distributions.distribution.Distribution instance which should have a log_prob() method.
+           Note we assume distrubution was constructed with center=0 and shape=1.  Any normalizing and recentering
+           is achieved by explicit`transformations` here.
+
+    Returns the mean log_likelihood"""
+
+    e = observations / sigma
+    logging.debug(f"e: \n{e}")
+
+    # Compute the log likelihoods on the innovations
+    ll = distribution.log_prob(e) - torch.log(sigma)
+
+    # For consistency with the multivariate case, we *sum* over the
+    # variables (columns) and *average* over the rows (observations).
+    # Summing over the variables is equivalent to multiplying the
+    # marginal distributions to get a join distribution.
+
+    return torch.mean(sum(ll, dim=1))
+
+
+def multivariate_conditional_log_likelihoods(
+    observations, transformations, distribution
+):
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
@@ -184,7 +213,76 @@ def conditional_log_likelihoods(observations, transformations, distribution):
     return torch.mean(ll)
 
 
-def multivariate_simulate(observations, a, b, c, d, h_bar):
+def univariate_simulate(
+    observations: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    d: torch.Tensor,
+    sample_std: torch.Tensor,
+):
+    """Given a, b, c, d, and observations, generate the *estimated*
+    standard deviations (marginal) for each observation
+
+    Argument:
+        observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        a: torch.Tensor of dimension n_symbols which is the AR coefficient for each symbol
+        b: torch.Tensor of dimension n_symbols which is the MA coefficient for each symbol
+        c: torch.Tensor of dimension n_symbols which is the coefficient of sample_std.
+           The product of the two is used for the constant term
+        d: torch.Tensor of dimension n_symbols which is the coefficient of sample_std.
+           The product of the two is used as the initial state.
+
+    """
+    sigma_t = d * sample_std
+    sigma_sequence = []
+
+    for k, o in enumerate(observations):
+        # Store the current ht before predicting next one
+        sigma_sequence.append(sigma_t)
+
+        # The variance is (a * sigma)**2 + (b * o)**2 + (c * sigma_std)**2
+        # While searching over the parameter space, an unstable value for `a` may be tested.
+        # Clamp to prevent it from overflowing.
+        a_sigma = torch.clamp(a * sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
+        b_o = b * o
+        c_sigma_std = c * sigma_std
+
+        # To avoid numerical issues associated with expressions of the form
+        # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
+        # case, which is to stack the variables (a, b, c) vertically and take
+        # the column norms.  We depend on the vector_norm()
+        # implementation being stable.
+
+        sigma_t = torch.linalg.vector_norm(
+            torch.cat((a_sigma, b_o, c_sigma_std), axis=0), dim=0
+        )
+
+    sigma = torch.stack(h_sequence)
+    return sigma
+
+
+def multivariate_simulate(
+    observations: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor,
+    d: torch.Tensor,
+    h_bar: torch.Tensor,
+):
+    """Given a, b, c, d, and observations, generate the *estimated*
+    lower triangular square roots of the sequence of covariance matrix estimates.
+
+    Argument:
+        observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        a: torch.Tensor of dimension (n_symbols, n_symbols) which is the AR coefficient
+        b: torch.Tensor of dimension (n_symbols, n_symbols)  which is the MA coefficient
+        c: torch.Tensor of dimension (n_symbols, n_symbols) which is the coefficient of h_bar.
+           The product of the two is used for the constant term
+        d: torch.Tensor of dimension n_symbosl which is the coefficient of sample_std
+           The product of the two used as the initial state.
+
+    """
     ht = d @ h_bar
     h_sequence = []
 
@@ -192,13 +290,13 @@ def multivariate_simulate(observations, a, b, c, d, h_bar):
         # Store the current ht before predicting next one
         h_sequence.append(ht)
 
-        # While searching over the parameter space an unstable value for `a` may be tested.
-        # Clamp ht to prevent it from overflowing.
+        # While searching over the parameter space, an unstable value for `a` may be tested.
+        # Clamp to prevent it from overflowing.
 
         a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
         b_o = (b @ o).unsqueeze(1)
 
-        # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + c @ c.Tp
+        # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ h_bar) @ (c @ h_bar).T
         # Unnecessary squaring is discouraged for nunerical stability.
         # Instead, we use only square roots and never explicity
         # compute the covariance.  This is a common 'trick' achieved
@@ -224,16 +322,18 @@ def multivariate_simulate(observations, a, b, c, d, h_bar):
     return h
 
 
-def univariate_log_likelihood(observations, a, b, c, d, sample_var, distribution):
+def univariate_log_likelihood(observations, a, b, c, d, sample_std, distribution):
     logging.debug(f"uv likelihood: a:\n{a}")
     logging.debug(f"uv likelihood: b:\n{b}")
     logging.debug(f"uv likelihood: c:\n{c}")
     logging.debug(f"uv likelihood: d:\n{c}")
 
-    var = univariate_simulate(observations, a, b, c, d, sample_var)
+    sigma = univariate_simulate(observations, a, b, c, d, sample_std)
 
     if h is not None:
-        mean_ll = conditional_log_likelihoods(observations, var, distribution)
+        mean_ll = marginal_conditional_log_likelihoods(
+            observations, sigma, distribution
+        )
     else:
         mean_ll = torch.tensor(float("-inf"), requires_grad=True)
 
@@ -262,7 +362,9 @@ def multivariate_log_likelihood(observations, a, b, c, d, h_bar, distribution):
     h = multivariate_simulate(observations, a, b, c, d, h_bar)
 
     if h is not None:
-        mean_ll = conditional_log_likelihoods(observations, h, distribution)
+        mean_ll = multivariate_conditional_log_likelihoods(
+            observations, h, distribution
+        )
     else:
         mean_ll = torch.tensor(float("-inf"), requires_grad=True)
 
@@ -336,10 +438,18 @@ def run(
     h_bar = make_diagonal_nonnegative(h_bar)
     logging.info(f"h_bar:\n{h_bar}")
 
-    sample_var = torch.var(observations, dim=0)
-    logging.info(f"sample_var:\n{sample_var}")
+    sample_std = torch.std(observations, dim=0)
+    logging.info(f"sample_std:\n{sample_std}")
 
-    def loss_closure():
+    def univariate_loss_closure():
+        optim.zero_grad()
+        loss = -univariate_log_likelihood(
+            observations, au, bu, cu, du, sample_std, distribution
+        )
+        loss.backward()
+        return loss
+
+    def multivariate_loss_closure():
         optim.zero_grad()
         loss = -multivariate_log_likelihood(
             observations, a, b, c, d, h_bar, distribution
@@ -359,7 +469,7 @@ def run(
     done = False
 
     while not done:
-        optim.step(loss_closure)
+        optim.step(multivariate_loss_closure)
         with torch.no_grad():
             current_loss = -multivariate_log_likelihood(
                 observations, a, b, c, d, h_bar, distribution
@@ -400,7 +510,7 @@ def run(
     print("transformations:\n", h)
 
     # Compute the final loss
-    ll = conditional_log_likelihoods(observations, h, distribution)
+    ll = multivariate_conditional_log_likelihoods(observations, h, distribution)
 
     logging.info(f"Transformation estimates:\n{h}")
 
