@@ -81,15 +81,22 @@ def make_diagonal_nonnegative(m):
 
 def random_lower_triangular(n, scale=1.0, requires_grad=True):
     scale = torch.tensor(scale, device=device)
-    m = torch.randn(n, n, device=device) - 0.5
+    m = torch.rand(n, n, device=device) - 0.5
     m = scale * make_diagonal_nonnegative(torch.tril(m))
     m.requires_grad = requires_grad
     return m
 
 
-def initial_parameters(n, observations, device=None):
-    std = torch.std(observations, dim=0)
+def initial_univariate_parameters(n, device=None):
+    a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.ones(n, device=device)
+    b = DECAY_FOR_INITIALIZATION * torch.ones(n, device=device)
+    c = torch.ones(n, device=device)
+    d = torch.ones(n, device=device)
 
+    return a, b, c, d
+
+
+def initial_multivariate_parameters(n, device=None):
     # Initialize a and b as simple multiples of the identity
     a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=device)
     b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=device)
@@ -113,7 +120,7 @@ def initial_parameters(n, observations, device=None):
     return a, b, c, d
 
 
-distribution = torch.distributions.normal.Normal(
+normal_distribution = torch.distributions.normal.Normal(
     loc=torch.tensor(0.0), scale=torch.tensor(1.0)
 )
 
@@ -177,7 +184,7 @@ def conditional_log_likelihoods(observations, transformations, distribution):
     return torch.mean(ll)
 
 
-def simulate(observations, a, b, c, d, h_bar):
+def multivariate_simulate(observations, a, b, c, d, h_bar):
     ht = d @ h_bar
     h_sequence = []
 
@@ -211,13 +218,29 @@ def simulate(observations, a, b, c, d, h_bar):
 
         # Transpose ht to get the lower triangular version.
 
-        ht = ht_t.T
+        ht = make_diagonal_nonnegative(ht_t.T)
 
     h = torch.stack(h_sequence)
     return h
 
 
-def get_log_likelihood(observations, a, b, c, d, h_bar):
+def univariate_log_likelihood(observations, a, b, c, d, sample_var, distribution):
+    logging.debug(f"uv likelihood: a:\n{a}")
+    logging.debug(f"uv likelihood: b:\n{b}")
+    logging.debug(f"uv likelihood: c:\n{c}")
+    logging.debug(f"uv likelihood: d:\n{c}")
+
+    var = univariate_simulate(observations, a, b, c, d, sample_var)
+
+    if h is not None:
+        mean_ll = conditional_log_likelihoods(observations, var, distribution)
+    else:
+        mean_ll = torch.tensor(float("-inf"), requires_grad=True)
+
+    return mean_ll
+
+
+def multivariate_log_likelihood(observations, a, b, c, d, h_bar, distribution):
     # Running through a tril() will force autograd to compute a zero gradient
     # for the upper triangular portion so that those entries are ignored.
     a = torch.tril(a)
@@ -236,7 +259,7 @@ def get_log_likelihood(observations, a, b, c, d, h_bar):
     logging.debug(f"likelihood: c:\n{c}")
     logging.debug(f"likelihood: d:\n{c}")
 
-    h = simulate(observations, a, b, c, d, h_bar)
+    h = multivariate_simulate(observations, a, b, c, d, h_bar)
 
     if h is not None:
         mean_ll = conditional_log_likelihoods(observations, h, distribution)
@@ -268,6 +291,8 @@ def run(
     logging.info(f"Evaluation/termination start date: {eval_start_date}")
     logging.info(f"Evaluation/termination end date: {eval_end_date}")
 
+    distribution = normal_distribution
+
     data_store = stock_data.FileSystemStore("training_data")
     if use_hsmd:
         data_source = data_sources.HugeStockMarketDatasetSource(use_hsmd)
@@ -293,11 +318,17 @@ def run(
     observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
-    a, b, c, d = initial_parameters(len(symbols), observations, device=device)
+    a, b, c, d = initial_multivariate_parameters(len(symbols), device=device)
     logging.debug(f"a:\n{a}")
     logging.debug(f"b:\n{b}")
     logging.debug(f"c:\n{c}")
     logging.debug(f"d:\n{d}")
+
+    au, bu, cu, du = initial_univariate_parameters(len(symbols), device=device)
+    logging.debug(f"au:\n{au}")
+    logging.debug(f"bu:\n{bu}")
+    logging.debug(f"cu:\n{cu}")
+    logging.debug(f"du:\n{du}")
 
     h_bar = (torch.linalg.qr(observations, mode="reduced")[1]).T / torch.sqrt(
         torch.tensor(observations.shape[0])
@@ -305,9 +336,14 @@ def run(
     h_bar = make_diagonal_nonnegative(h_bar)
     logging.info(f"h_bar:\n{h_bar}")
 
+    sample_var = torch.var(observations, dim=0)
+    logging.info(f"sample_var:\n{sample_var}")
+
     def loss_closure():
         optim.zero_grad()
-        loss = -get_log_likelihood(observations, a, b, c, d, h_bar)
+        loss = -multivariate_log_likelihood(
+            observations, a, b, c, d, h_bar, distribution
+        )
         loss.backward()
         return loss
 
@@ -325,7 +361,9 @@ def run(
     while not done:
         optim.step(loss_closure)
         with torch.no_grad():
-            current_loss = -get_log_likelihood(observations, a, b, c, d, h_bar)
+            current_loss = -multivariate_log_likelihood(
+                observations, a, b, c, d, h_bar, distribution
+            )
             logging.info(
                 f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
             )
@@ -339,7 +377,7 @@ def run(
     logging.info("Finished")
 
     # Simulate one more time with optimal parameters.
-    h = simulate(observations, a, b, c, d, h_bar)
+    h = multivariate_simulate(observations, a, b, c, d, h_bar)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
