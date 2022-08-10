@@ -93,6 +93,9 @@ def initial_univariate_parameters(n, device=None):
     c = torch.ones(n, device=device)
     d = torch.ones(n, device=device)
 
+    for m in (a, b, c, d):
+        m.requires_grad = True
+
     return a, b, c, d
 
 
@@ -145,11 +148,11 @@ def marginal_conditional_log_likelihoods(observations, sigma, distribution):
     ll = distribution.log_prob(e) - torch.log(sigma)
 
     # For consistency with the multivariate case, we *sum* over the
-    # variables (columns) and *average* over the rows (observations).
+    # variables (columns) first and *average* over the rows (observations).
     # Summing over the variables is equivalent to multiplying the
     # marginal distributions to get a join distribution.
 
-    return torch.mean(sum(ll, dim=1))
+    return torch.mean(torch.sum(ll, dim=1))
 
 
 def multivariate_conditional_log_likelihoods(
@@ -241,12 +244,12 @@ def univariate_simulate(
         # Store the current ht before predicting next one
         sigma_sequence.append(sigma_t)
 
-        # The variance is (a * sigma)**2 + (b * o)**2 + (c * sigma_std)**2
+        # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_std)**2
         # While searching over the parameter space, an unstable value for `a` may be tested.
         # Clamp to prevent it from overflowing.
         a_sigma = torch.clamp(a * sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
         b_o = b * o
-        c_sigma_std = c * sigma_std
+        c_sample_std = c * sample_std
 
         # To avoid numerical issues associated with expressions of the form
         # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
@@ -254,11 +257,10 @@ def univariate_simulate(
         # the column norms.  We depend on the vector_norm()
         # implementation being stable.
 
-        sigma_t = torch.linalg.vector_norm(
-            torch.cat((a_sigma, b_o, c_sigma_std), axis=0), dim=0
-        )
+        m = torch.stack((a_sigma, b_o, c_sample_std), axis=0)
+        sigma_t = torch.linalg.vector_norm(m, dim=0)
 
-    sigma = torch.stack(h_sequence)
+    sigma = torch.stack(sigma_sequence)
     return sigma
 
 
@@ -330,7 +332,7 @@ def univariate_log_likelihood(observations, a, b, c, d, sample_std, distribution
 
     sigma = univariate_simulate(observations, a, b, c, d, sample_std)
 
-    if h is not None:
+    if sigma is not None:
         mean_ll = marginal_conditional_log_likelihoods(
             observations, sigma, distribution
         )
@@ -446,6 +448,7 @@ def run(
         loss = -univariate_log_likelihood(
             observations, au, bu, cu, du, sample_std, distribution
         )
+        print("loss: ", loss)
         loss.backward()
         return loss
 
@@ -465,24 +468,44 @@ def run(
     )
 
     logging.info("Starting optimization.")
-    best_loss = float("inf")
-    done = False
+    best_uv_loss = float("inf")
+    best_mv_loss = float("inf")
+    uv_done = False
+    mv_done = False
 
-    while not done:
+    while not uv_done:
+        optim.step(univariate_loss_closure)
+        with torch.no_grad():
+            current_loss = -univariate_log_likelihood(
+                observations, au, bu, cu, du, sample_std, distribution
+            )
+            logging.info(
+                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_uv_loss:.4f}"
+            )
+
+        if float(current_loss) < best_uv_loss:
+            best_uv_loss = current_loss
+        else:
+            logging.info("Stopping")
+            uv_done = True
+
+    logging.info("Finished")
+
+    while not mv_done:
         optim.step(multivariate_loss_closure)
         with torch.no_grad():
             current_loss = -multivariate_log_likelihood(
                 observations, a, b, c, d, h_bar, distribution
             )
             logging.info(
-                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
+                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_mv_loss:.4f}"
             )
 
-        if float(current_loss) < best_loss:
-            best_loss = current_loss
+        if float(current_loss) < best_mv_loss:
+            best_mv_loss = current_loss
         else:
             logging.info("Stopping")
-            done = True
+            mv_done = True
 
     logging.info("Finished")
 
