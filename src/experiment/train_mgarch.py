@@ -69,23 +69,24 @@ def prepare_data(
     return training_data
 
 
+def make_random_lower_triangular(n, scale=1.0, requires_grad=True):
+    scale = torch.tensor(scale, device=device)
+    m = torch.randn(n, n, device=device) - 0.5
+    diag_signs = torch.diag(torch.sign(torch.diag(m)))
+    m = scale * torch.tril(diag_signs @ m)
+    m.requires_grad = requires_grad
+    return m
+
+
 def initial_parameters(n, observations, device=None):
     std = torch.std(observations, dim=0)
-
-    def make_random_lower_triangular(scale=1.0, requires_grad=True):
-        scale = torch.tensor(scale, device=device)
-        m = torch.randn(n, n, device=device) - 0.5
-        diag_signs = torch.diag(torch.sign(torch.diag(m)))
-        m = scale * torch.tril(diag_signs @ m)
-        m.requires_grad = requires_grad
-        return m
 
     # Initialize a and b as simple multiples of the identity
     a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=device)
     b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=device)
 
     # c is triangular
-    c = make_random_lower_triangular(0.01, False)
+    c = make_random_lower_triangular(n, 0.01, False)
 
     # Initialize h0 to a diagonal matrix with marginal sample std deviations
     h0 = torch.diag(std)
@@ -124,6 +125,9 @@ def conditional_log_likelihoods(observations, transformations, distribution):
 
     Returns vector of log_likelihoods"""
 
+    # Make a tensor containing stacked identity matrices so that we can
+    # use solve_triangular() rather than inverting some lower-trangular matirces.
+    # solve_triangular() should be more efficient.
     identities = (
         torch.eye(observations.shape[1])
         .unsqueeze(0)
@@ -164,7 +168,7 @@ def conditional_log_likelihoods(observations, transformations, distribution):
 
     ll = log_pdf - log_det
 
-    return ll
+    return torch.mean(ll)
 
 
 def simulate(observations, a, b, c, h0):
@@ -177,29 +181,39 @@ def simulate(observations, a, b, c, h0):
 
         # While searching over the parameter space an unstable value for `a` may be tested.
         # Clamp ht to prevent it from overflowing.
+
         a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
         b_o = (b @ o).unsqueeze(1)
 
         # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + c @ c.Tp
         # Unnecessary squaring is discouraged for nunerical stability.
-        # Instead, we use only square roots and never explicity compute the covariance.
-        # This is a common 'trick' achieved by concatenating the square roots in a larger array and
-        # computing the QR factoriation, which computes the square root of the sum of squares.
+        # Instead, we use only square roots and never explicity
+        # compute the covariance.  This is a common 'trick' achieved
+        # by concatenating the square roots in a larger array and
+        # computing the QR factoriation, which computes the square
+        # root of the sum of squares.  The covariance matrix isn't
+        # formed explicitly in this code except at the very end when
+        # it's time to return the covariance matrices to the user.
+
         m = torch.cat((a_ht, b_o, c), axis=1)
 
-        # Unfortunately there's no QL factorization so we transpose m and use the QR.
-        # We only need the 'R' return value, so the Q return value is dropped.
+        # Unfortunately there's no QL factorization in PyTorch so we
+        # transpose m and use the QR.  We only need the 'R' return
+        # value, so the Q return value is dropped.
+
         ht_t = torch.linalg.qr(m.T, mode="reduced")[1]
 
         # Transpose ht to get the lower triangular version.
+
         ht = ht_t.T
 
     h = torch.stack(h_sequence)
     return h
 
 
-def mean_log_likelihood(observations, a, b, c, h0):
-    # Running through a tri will force autograd to ignore any upper entries
+def get_log_likelihood(observations, a, b, c, h0):
+    # Running through a tril() will force autograd to compute a zero gradient
+    # for the upper triangular portion so that those entries are ignored.
     a = torch.tril(a)
     b = torch.tril(b)
     c = torch.tril(c)
@@ -219,8 +233,7 @@ def mean_log_likelihood(observations, a, b, c, h0):
     h = simulate(observations, a, b, c, h0)
 
     if h is not None:
-        ll = conditional_log_likelihoods(observations, h, distribution)
-        mean_ll = torch.mean(ll)
+        mean_ll = conditional_log_likelihoods(observations, h, distribution)
     else:
         mean_ll = torch.tensor(float("-inf"), requires_grad=True)
 
@@ -282,13 +295,12 @@ def run(
 
     def loss_closure():
         optim.zero_grad()
-        loss = -mean_log_likelihood(observations, a, b, c, h0)
+        loss = -get_log_likelihood(observations, a, b, c, h0)
         loss.backward()
         return loss
 
-    parameters = [a, b, c, h0]
     optim = torch.optim.LBFGS(
-        parameters,
+        [a, b, c, h0],
         max_iter=PROGRESS_ITERATIONS,
         lr=LEARNING_RATE,
         line_search_fn="strong_wolfe",
@@ -301,7 +313,7 @@ def run(
     while not done:
         optim.step(loss_closure)
         with torch.no_grad():
-            current_loss = -mean_log_likelihood(observations, a, b, c, h0)
+            current_loss = -get_log_likelihood(observations, a, b, c, h0)
             logging.info(
                 f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
             )
@@ -338,7 +350,7 @@ def run(
     print("transformations:\n", h)
 
     # Compute the final loss
-    ll = torch.mean(conditional_log_likelihoods(observations, h, distribution))
+    ll = conditional_log_likelihoods(observations, h, distribution)
 
     logging.info(f"Transformation estimates:\n{h}")
 
