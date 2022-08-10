@@ -19,12 +19,14 @@ from deep_volatility_models import time_series_datasets
 
 DEBUG = False
 
-EPS = 1e-10
+PROGRESS_ITERATIONS = 20
 IID_MODEL = False
+DECAY_FOR_INITIALIZATION = 0.30
 LEARNING_RATE = 0.25
-MAX_ITERATIONS = 20
+
 MAX_CLAMP = 1e10
 MIN_CLAMP = -MAX_CLAMP
+
 DEFAULT_SEED = 42
 
 
@@ -37,7 +39,7 @@ logging.basicConfig(
 if torch.cuda.is_available():
     dev = "cuda:0"
 # elif torch.has_mps:
-#     dev = "mps"
+#    dev = "mps"
 else:
     dev = "cpu"
 
@@ -67,35 +69,36 @@ def prepare_data(
     return training_data
 
 
-# Model is
-# h_k = w + h_{k-1} * f + |e_{k-1}| * g
-# where h is intended to be the covariance estimate
-# f and g are lower triangular.
-
-DECAY = 0.30
-
-
-def initial_parameters(n, observations):
+def initial_parameters(n, observations, device=None):
     std = torch.std(observations, dim=0)
 
-    def make_one(scale=1.0, requires_grad=True):
-        scale = torch.tensor(scale)
-        m = torch.randn(n, n) - 0.5
+    def make_random_lower_triangular(scale=1.0, requires_grad=True):
+        scale = torch.tensor(scale, device=device)
+        m = torch.randn(n, n, device=device) - 0.5
         diag_signs = torch.diag(torch.sign(torch.diag(m)))
         m = scale * torch.tril(diag_signs @ m)
         m.requires_grad = requires_grad
         return m
 
-    a = (1.0 - DECAY) * torch.eye(n)
-    b = DECAY * torch.eye(n)
-    c = make_one(0.01, False)
+    # Initialize a and b as simple multiples of the identity
+    a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=device)
+    b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=device)
+
+    # c is triangular
+    c = make_random_lower_triangular(0.01, False)
+
+    # Initialize h0 to a diagonal matrix with marginal sample std deviations
     h0 = torch.diag(std)
+    print(h0)
 
     if IID_MODEL:
         a = torch.diag(torch.diag(a))
         b = torch.diag(torch.diag(b))
         c = torch.diag(torch.diag(c))
         h0 = torch.diag(torch.diag(h0))
+
+    # We set requires_grad here so that the preceeding diags and tril calls
+    # aren't subject to differentiation
 
     for t in [a, b, c, h0]:
         t.requires_grad = True
@@ -106,14 +109,6 @@ def initial_parameters(n, observations):
 distribution = torch.distributions.normal.Normal(
     loc=torch.tensor(0.0), scale=torch.tensor(1.0)
 )
-
-
-def fix_negative_determinant(m):
-    """The log loss of transformed variables depends on the absolute value of the determinant.
-    This function makes sure the determinant is >= 0"""
-    diag_signs = torch.sign(torch.diagonal(m, dim1=1, dim2=2))
-    diag_signs_as_matrix = torch.diag_embed(diag_signs, dim1=1, dim2=2)
-    return diag_signs_as_matrix @ m
 
 
 def conditional_log_likelihoods(observations, transformations, distribution):
@@ -129,7 +124,19 @@ def conditional_log_likelihoods(observations, transformations, distribution):
 
     Returns vector of log_likelihoods"""
 
-    inv_t = torch.inverse(transformations)
+    identities = (
+        torch.eye(observations.shape[1])
+        .unsqueeze(0)
+        .expand(observations.shape[0], observations.shape[1], observations.shape[1])
+    )
+
+    # inv_t = torch.inverse(transformations)
+    inv_t = torch.linalg.solve_triangular(
+        transformations,
+        identities,
+        upper=False,
+    )
+
     # The unsqueeze is necessary because the matmul is on the 'batch'
     # of observations.  The shape of `inv_t` is (n_obs, n, n) while
     # the shape of `observations` is (n_obs, n) Without adding the
@@ -137,6 +144,7 @@ def conditional_log_likelihoods(observations, transformations, distribution):
     # what we're trying to multiply.  We remove the ambiguity, we make
     # `observations` have shape (n_obj, n, 1)
     observations = observations.unsqueeze(2)
+
     # Do the multiplication, then drop the extra dimension
     e = (inv_t @ observations).squeeze(2)
 
@@ -144,41 +152,47 @@ def conditional_log_likelihoods(observations, transformations, distribution):
 
     # Compute the log likelihoods on the innovations
     log_pdf = torch.sum(distribution.log_prob(e), dim=1)
+
     # Divide by the determinant by subtracting its log to get the the log
     # likelihood of the observations.  The `transformations` are lower-triangular, so
-    # this calculation should be resonably fast.
-    log_det = torch.logdet(fix_negative_determinant(transformations))
+    # only the diagonal entries need to be used in the determinant calculation.
+    # This should be faster than calling log_det().
+
+    log_det = torch.sum(
+        torch.log(torch.abs(torch.diagonal(transformations, dim1=1, dim2=2))), dim=1
+    )
 
     ll = log_pdf - log_det
+
     return ll
 
 
 def simulate(observations, a, b, c, h0):
-    hk = h0
+    ht = h0
     h_sequence = []
 
     for k, o in enumerate(observations):
-        # Store the current hk before predicting next one
-        h_sequence.append(hk)
+        # Store the current ht before predicting next one
+        h_sequence.append(ht)
 
-        # While probing the parameter space an unstable value for `f` may be tested.
-        # Clamp hk to prevent it from overflowing.
-        # t1 = hk @ f
-        t1 = torch.clamp(a @ hk, min=MIN_CLAMP, max=MAX_CLAMP)
-        t2 = (b @ o).unsqueeze(1)
-        covariance = t1 @ t1.T + t2 @ t2.T + c @ c.T
-        try:
-            hk = torch.linalg.cholesky(
-                covariance
-                + EPS * torch.max(covariance) * torch.eye(covariance.shape[0])
-            )
-        except Exception as e:
-            print(e)
-            print(f"hk:\n{hk}")
-            print(f"t1:\n{t1}")
-            print(f"t2:\n{t2}")
-            print(f"c:\n{c}")
-            raise e
+        # While searching over the parameter space an unstable value for `a` may be tested.
+        # Clamp ht to prevent it from overflowing.
+        a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
+        b_o = (b @ o).unsqueeze(1)
+
+        # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + c @ c.Tp
+        # Unnecessary squaring is discouraged for nunerical stability.
+        # Instead, we use only square roots and never explicity compute the covariance.
+        # This is a common 'trick' achieved by concatenating the square roots in a larger array and
+        # computing the QR factoriation, which computes the square root of the sum of squares.
+        m = torch.cat((a_ht, b_o, c), axis=1)
+
+        # Unfortunately there's no QL factorization so we transpose m and use the QR.
+        # We only need the 'R' return value, so the Q return value is dropped.
+        ht_t = torch.linalg.qr(m.T, mode="reduced")[1]
+
+        # Transpose ht to get the lower triangular version.
+        ht = ht_t.T
 
     h = torch.stack(h_sequence)
     return h
@@ -257,10 +271,10 @@ def run(
     )
     logging.info(f"training_data:\n {training_data}")
 
-    observations = torch.tensor(training_data.values, dtype=torch.float)
+    observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
-    a, b, c, h0 = initial_parameters(len(symbols), observations)
+    a, b, c, h0 = initial_parameters(len(symbols), observations, device=device)
     logging.debug(f"h0:\n{h0}")
     logging.debug(f"a:\n{a}")
     logging.debug(f"b:\n{b}")
@@ -275,7 +289,7 @@ def run(
     parameters = [a, b, c, h0]
     optim = torch.optim.LBFGS(
         parameters,
-        max_iter=MAX_ITERATIONS,
+        max_iter=PROGRESS_ITERATIONS,
         lr=LEARNING_RATE,
         line_search_fn="strong_wolfe",
     )
