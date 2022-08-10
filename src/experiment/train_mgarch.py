@@ -20,7 +20,7 @@ from deep_volatility_models import time_series_datasets
 DEBUG = False
 
 PROGRESS_ITERATIONS = 20
-IID_MODEL = False
+DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
 LEARNING_RATE = 0.25
 
@@ -69,11 +69,20 @@ def prepare_data(
     return training_data
 
 
-def make_random_lower_triangular(n, scale=1.0, requires_grad=True):
+def make_diagonal_nonnegative(m):
+    """Given a single lower triangular matrices m, return an `equivalent` matrix
+    having non-negative diagonal entries.  Here `equivalent` means m@m.T is unchanged.
+    """
+    diag = torch.diag(m)
+    diag_signs = torch.ones(diag.shape)
+    diag_signs[diag < 0.0] = -1
+    return m * diag_signs
+
+
+def random_lower_triangular(n, scale=1.0, requires_grad=True):
     scale = torch.tensor(scale, device=device)
     m = torch.randn(n, n, device=device) - 0.5
-    diag_signs = torch.diag(torch.sign(torch.diag(m)))
-    m = scale * torch.tril(diag_signs @ m)
+    m = scale * make_diagonal_nonnegative(torch.tril(m))
     m.requires_grad = requires_grad
     return m
 
@@ -86,25 +95,22 @@ def initial_parameters(n, observations, device=None):
     b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=device)
 
     # c is triangular
-    c = make_random_lower_triangular(n, 0.01, False)
+    c = random_lower_triangular(n, 0.01, False)
+    d = torch.eye(n, device=device)
 
-    # Initialize h0 to a diagonal matrix with marginal sample std deviations
-    h0 = torch.diag(std)
-    print(h0)
-
-    if IID_MODEL:
+    if DIAGONAL_MODEL:
         a = torch.diag(torch.diag(a))
         b = torch.diag(torch.diag(b))
         c = torch.diag(torch.diag(c))
-        h0 = torch.diag(torch.diag(h0))
+        d = torch.diag(torch.diag(d))
 
     # We set requires_grad here so that the preceeding diags and tril calls
     # aren't subject to differentiation
 
-    for t in [a, b, c, h0]:
+    for t in [a, b, c, d]:
         t.requires_grad = True
 
-    return a, b, c, h0
+    return a, b, c, d
 
 
 distribution = torch.distributions.normal.Normal(
@@ -171,8 +177,8 @@ def conditional_log_likelihoods(observations, transformations, distribution):
     return torch.mean(ll)
 
 
-def simulate(observations, a, b, c, h0):
-    ht = h0
+def simulate(observations, a, b, c, d, h_bar):
+    ht = d @ h_bar
     h_sequence = []
 
     for k, o in enumerate(observations):
@@ -195,7 +201,7 @@ def simulate(observations, a, b, c, h0):
         # formed explicitly in this code except at the very end when
         # it's time to return the covariance matrices to the user.
 
-        m = torch.cat((a_ht, b_o, c), axis=1)
+        m = torch.cat((a_ht, b_o, c @ h_bar), axis=1)
 
         # Unfortunately there's no QL factorization in PyTorch so we
         # transpose m and use the QR.  We only need the 'R' return
@@ -211,26 +217,26 @@ def simulate(observations, a, b, c, h0):
     return h
 
 
-def get_log_likelihood(observations, a, b, c, h0):
+def get_log_likelihood(observations, a, b, c, d, h_bar):
     # Running through a tril() will force autograd to compute a zero gradient
     # for the upper triangular portion so that those entries are ignored.
     a = torch.tril(a)
     b = torch.tril(b)
     c = torch.tril(c)
-    h0 = torch.tril(h0)
+    d = torch.tril(d)
 
-    if IID_MODEL:
+    if DIAGONAL_MODEL:
         a = torch.diag(torch.diag(a))
         b = torch.diag(torch.diag(b))
         c = torch.diag(torch.diag(c))
-        h0 = torch.diag(torch.diag(h0))
+        d = torch.diag(torch.diag(d))
 
     logging.debug(f"likelihood: a:\n{a}")
     logging.debug(f"likelihood: b:\n{b}")
     logging.debug(f"likelihood: c:\n{c}")
-    logging.debug(f"likelihood: h0:\n{h0}")
+    logging.debug(f"likelihood: d:\n{c}")
 
-    h = simulate(observations, a, b, c, h0)
+    h = simulate(observations, a, b, c, d, h_bar)
 
     if h is not None:
         mean_ll = conditional_log_likelihoods(observations, h, distribution)
@@ -287,20 +293,26 @@ def run(
     observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
-    a, b, c, h0 = initial_parameters(len(symbols), observations, device=device)
-    logging.debug(f"h0:\n{h0}")
+    a, b, c, d = initial_parameters(len(symbols), observations, device=device)
     logging.debug(f"a:\n{a}")
     logging.debug(f"b:\n{b}")
     logging.debug(f"c:\n{c}")
+    logging.debug(f"d:\n{d}")
+
+    h_bar = (torch.linalg.qr(observations, mode="reduced")[1]).T / torch.sqrt(
+        torch.tensor(observations.shape[0])
+    )
+    h_bar = make_diagonal_nonnegative(h_bar)
+    logging.info(f"h_bar:\n{h_bar}")
 
     def loss_closure():
         optim.zero_grad()
-        loss = -get_log_likelihood(observations, a, b, c, h0)
+        loss = -get_log_likelihood(observations, a, b, c, d, h_bar)
         loss.backward()
         return loss
 
     optim = torch.optim.LBFGS(
-        [a, b, c, h0],
+        [a, b, c, d],
         max_iter=PROGRESS_ITERATIONS,
         lr=LEARNING_RATE,
         line_search_fn="strong_wolfe",
@@ -313,7 +325,7 @@ def run(
     while not done:
         optim.step(loss_closure)
         with torch.no_grad():
-            current_loss = -get_log_likelihood(observations, a, b, c, h0)
+            current_loss = -get_log_likelihood(observations, a, b, c, d, h_bar)
             logging.info(
                 f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
             )
@@ -327,7 +339,7 @@ def run(
     logging.info("Finished")
 
     # Simulate one more time with optimal parameters.
-    h = simulate(observations, a, b, c, h0)
+    h = simulate(observations, a, b, c, d, h_bar)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
@@ -354,10 +366,10 @@ def run(
 
     logging.info(f"Transformation estimates:\n{h}")
 
-    logging.info(f"Initial estimate h0:\n{h0}")
     logging.info(f"AR matrix a:\n{a}")
     logging.info(f"MA matrix b:\n{b}")
-    logging.info(f"Constant matrix c:\n{c}")
+    logging.info(f"h_bar multiplier for constant term c:\n{c}")
+    logging.info(f"h_bar multiplier for initial estimate d:\n{d}")
 
     logging.info(f"**** Final likelihood (per sample): {ll:.4f} ****")
 
@@ -365,7 +377,7 @@ def run(
     logging.debug(f"a.grad:\n{a.grad}")
     logging.debug(f"b.grad:\n{b.grad}")
     logging.debug(f"c.grad:\n{c.grad}")
-    logging.debug(f"h0.grad:\n{h0.grad}")
+    logging.debug(f"d.grad:\n{d.grad}")
 
 
 @click.command()
