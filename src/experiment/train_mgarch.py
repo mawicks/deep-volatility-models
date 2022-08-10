@@ -342,7 +342,9 @@ def univariate_log_likelihood(observations, a, b, c, d, sample_std, distribution
     return mean_ll
 
 
-def multivariate_log_likelihood(observations, a, b, c, d, h_bar, distribution):
+def multivariate_log_likelihood(
+    observations, a, b, c, d, h_bar, distribution, sigma_est=None
+):
     # Running through a tril() will force autograd to compute a zero gradient
     # for the upper triangular portion so that those entries are ignored.
     a = torch.tril(a)
@@ -443,71 +445,60 @@ def run(
     sample_std = torch.std(observations, dim=0)
     logging.info(f"sample_std:\n{sample_std}")
 
-    def univariate_loss_closure():
-        optim.zero_grad()
-        loss = -univariate_log_likelihood(
-            observations, au, bu, cu, du, sample_std, distribution
-        )
-        print("loss: ", loss)
-        loss.backward()
-        return loss
+    uv_optim = torch.optim.LBFGS(
+        [au, bu, cu, du],
+        max_iter=PROGRESS_ITERATIONS,
+        lr=LEARNING_RATE,
+        line_search_fn="strong_wolfe",
+    )
 
-    def multivariate_loss_closure():
-        optim.zero_grad()
-        loss = -multivariate_log_likelihood(
-            observations, a, b, c, d, h_bar, distribution
-        )
-        loss.backward()
-        return loss
-
-    optim = torch.optim.LBFGS(
+    mv_optim = torch.optim.LBFGS(
         [a, b, c, d],
         max_iter=PROGRESS_ITERATIONS,
         lr=LEARNING_RATE,
         line_search_fn="strong_wolfe",
     )
 
-    logging.info("Starting optimization.")
-    best_uv_loss = float("inf")
-    best_mv_loss = float("inf")
-    uv_done = False
-    mv_done = False
+    def univariate_loss_closure():
+        uv_optim.zero_grad()
+        loss = -univariate_log_likelihood(
+            observations, au, bu, cu, du, sample_std, distribution
+        )
+        loss.backward()
+        return loss
 
-    while not uv_done:
-        optim.step(univariate_loss_closure)
-        with torch.no_grad():
-            current_loss = -univariate_log_likelihood(
-                observations, au, bu, cu, du, sample_std, distribution
-            )
+    def optimize(optim, closure):
+        best_loss = float("inf")
+        done = False
+        logging.info("Starting optimization")
+        while not done:
+            optim.step(closure)
+            current_loss = closure()
             logging.info(
-                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_uv_loss:.4f}"
+                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
             )
+            if float(current_loss) < best_loss:
+                best_loss = current_loss
+            else:
+                logging.info("Finished")
+                done = True
 
-        if float(current_loss) < best_uv_loss:
-            best_uv_loss = current_loss
-        else:
-            logging.info("Stopping")
-            uv_done = True
+    optimize(uv_optim, univariate_loss_closure)
+    logging.info(
+        f"a: {au.detach().numpy()}, b: {bu.detach().numpy()}, c: {cu.detach().numpy()}, d: {du.detach().numpy()}"
+    )
 
-    logging.info("Finished")
+    sigma_est = univariate_simulate(observations, au, bu, cu, du, sample_std)
 
-    while not mv_done:
-        optim.step(multivariate_loss_closure)
-        with torch.no_grad():
-            current_loss = -multivariate_log_likelihood(
-                observations, a, b, c, d, h_bar, distribution
-            )
-            logging.info(
-                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_mv_loss:.4f}"
-            )
+    def multivariate_loss_closure():
+        mv_optim.zero_grad()
+        loss = -multivariate_log_likelihood(
+            observations, a, b, c, d, h_bar, distribution, sigma_est=None
+        )
+        loss.backward()
+        return loss
 
-        if float(current_loss) < best_mv_loss:
-            best_mv_loss = current_loss
-        else:
-            logging.info("Stopping")
-            mv_done = True
-
-    logging.info("Finished")
+    optimize(mv_optim, multivariate_loss_closure)
 
     # Simulate one more time with optimal parameters.
     h = multivariate_simulate(observations, a, b, c, d, h_bar)
