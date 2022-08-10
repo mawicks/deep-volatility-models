@@ -170,32 +170,19 @@ def multivariate_conditional_log_likelihoods(
 
     Returns vector of log_likelihoods"""
 
-    # Make a tensor containing stacked identity matrices so that we can
-    # use solve_triangular() rather than inverting some lower-trangular matirces.
-    # solve_triangular() should be more efficient.
-    identities = (
-        torch.eye(observations.shape[1])
-        .unsqueeze(0)
-        .expand(observations.shape[0], observations.shape[1], observations.shape[1])
-    )
-
-    # inv_t = torch.inverse(transformations)
-    inv_t = torch.linalg.solve_triangular(
-        transformations,
-        identities,
-        upper=False,
-    )
-
+    # First get the innovations sequence by forming transformation^(-1)*observations
     # The unsqueeze is necessary because the matmul is on the 'batch'
-    # of observations.  The shape of `inv_t` is (n_obs, n, n) while
-    # the shape of `observations` is (n_obs, n) Without adding the
-    # extract dimension to observations, matmul doesn't understand
-    # what we're trying to multiply.  We remove the ambiguity, we make
-    # `observations` have shape (n_obj, n, 1)
-    observations = observations.unsqueeze(2)
+    # of observations.  The shape of `t` is (n_obs, n, n) while
+    # the shape of `observations` is (n_obs, n). Without adding the
+    # extract dimension to observations, the solver won't see conforming dimensions.
+    # We remove the ambiguity, by making observations` have shape (n_obj, n, 1), then
+    # we remove the extra dimension from e.
 
-    # Do the multiplication, then drop the extra dimension
-    e = (inv_t @ observations).squeeze(2)
+    e = torch.linalg.solve_triangular(
+        transformations,
+        observations.unsqueeze(2),
+        upper=False,
+    ).squeeze(2)
 
     logging.debug(f"e: \n{e}")
 
