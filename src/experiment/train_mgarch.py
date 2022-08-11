@@ -18,7 +18,7 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-USE_SCALING = False
+USE_SCALING = True
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -497,11 +497,10 @@ def run(
     )
 
     if USE_SCALING:
-        sigma_est = univariate_simulate(
-            observations, au, bu, cu, du, sample_std
-        ).detach()
-        scaled_observations = observations / sigma_est
-        scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
+        with torch.no_grad():
+            sigma_est = univariate_simulate(observations, au, bu, cu, du, sample_std)
+            scaled_observations = observations / sigma_est
+            scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
     else:
         sigma_est = None
         scaled_observations = observations
