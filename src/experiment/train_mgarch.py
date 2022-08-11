@@ -18,7 +18,7 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-
+USE_SCALING = False
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -141,7 +141,9 @@ def marginal_conditional_log_likelihoods(observations, sigma, distribution):
 
     Returns the mean log_likelihood"""
 
-    e = observations / sigma
+    if sigma is not None:
+        e = observations / sigma
+
     logging.debug(f"e: \n{e}")
 
     # Compute the log likelihoods on the innovations
@@ -156,7 +158,7 @@ def marginal_conditional_log_likelihoods(observations, sigma, distribution):
 
 
 def multivariate_conditional_log_likelihoods(
-    observations, transformations, distribution
+    observations, transformations, distribution, sigma=None
 ):
     """
     Arguments:
@@ -167,8 +169,28 @@ def multivariate_conditional_log_likelihoods(
        distribution: torch.distributions.distribution.Distribution instance which should have a log_prob() method.
            Note we assume distrubution was constructed with center=0 and shape=1.  Any normalizing and recentering
            is achieved by explicit`transformations` here.
+       sigma: torch.Tensor of shape (n_obj, n_symbols) or None.
+              When sigma is specified, the observed variables
+              are related to the innovations by x = diag(sigma) T e.
+              This is when the estimator for the transformation
+              from e to x is factored into a diagonal scaling
+              matrix (sigma) and a correlating transformation T.
+              When sigma is not specified any scaling is already embedded in T.
 
-    Returns vector of log_likelihoods"""
+
+    Returns:
+       torch.Tensor - log_likelihood"""
+
+    # Divide by the determinant by subtracting its log to get the the log
+    # likelihood of the observations.  The `transformations` are lower-triangular, so
+    # only the diagonal entries need to be used in the determinant calculation.
+    # This should be faster than calling log_det().
+
+    log_det = torch.log(torch.abs(torch.diagonal(transformations, dim1=1, dim2=2)))
+
+    if sigma is not None:
+        log_det = log_det + torch.log(torch.abs(sigma))
+        observations = observations / sigma
 
     # First get the innovations sequence by forming transformation^(-1)*observations
     # The unsqueeze is necessary because the matmul is on the 'batch'
@@ -177,7 +199,6 @@ def multivariate_conditional_log_likelihoods(
     # extract dimension to observations, the solver won't see conforming dimensions.
     # We remove the ambiguity, by making observations` have shape (n_obj, n, 1), then
     # we remove the extra dimension from e.
-
     e = torch.linalg.solve_triangular(
         transformations,
         observations.unsqueeze(2),
@@ -187,18 +208,9 @@ def multivariate_conditional_log_likelihoods(
     logging.debug(f"e: \n{e}")
 
     # Compute the log likelihoods on the innovations
-    log_pdf = torch.sum(distribution.log_prob(e), dim=1)
+    log_pdf = distribution.log_prob(e)
 
-    # Divide by the determinant by subtracting its log to get the the log
-    # likelihood of the observations.  The `transformations` are lower-triangular, so
-    # only the diagonal entries need to be used in the determinant calculation.
-    # This should be faster than calling log_det().
-
-    log_det = torch.sum(
-        torch.log(torch.abs(torch.diagonal(transformations, dim1=1, dim2=2))), dim=1
-    )
-
-    ll = log_pdf - log_det
+    ll = torch.sum(log_pdf - log_det, dim=1)
 
     return torch.mean(ll)
 
@@ -330,8 +342,9 @@ def univariate_log_likelihood(observations, a, b, c, d, sample_std, distribution
 
 
 def multivariate_log_likelihood(
-    observations, a, b, c, d, h_bar, distribution, sigma_est=None
+    observations, a, b, c, d, h_bar, distribution, sigma=None
 ):
+
     # Running through a tril() will force autograd to compute a zero gradient
     # for the upper triangular portion so that those entries are ignored.
     a = torch.tril(a)
@@ -350,14 +363,22 @@ def multivariate_log_likelihood(
     logging.debug(f"likelihood: c:\n{c}")
     logging.debug(f"likelihood: d:\n{c}")
 
-    h = multivariate_simulate(observations, a, b, c, d, h_bar)
+    # When sigma is not None, h_bar should also be normalized
+    # so that its row norms are one.
 
-    if h is not None:
-        mean_ll = multivariate_conditional_log_likelihoods(
-            observations, h, distribution
-        )
+    if sigma is not None:
+        scaled_observations = observations / sigma
+        # scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
     else:
-        mean_ll = torch.tensor(float("-inf"), requires_grad=True)
+        scaled_observations = observations
+        # scaled_h_bar = h_bar
+
+    h = multivariate_simulate(scaled_observations, a, b, c, d, h_bar)
+
+    # It's important to use non-scaled observations in likelihood function
+    mean_ll = multivariate_conditional_log_likelihoods(
+        observations, h, distribution, sigma=sigma
+    )
 
     return mean_ll
 
@@ -475,12 +496,23 @@ def run(
         f"a: {au.detach().numpy()}, b: {bu.detach().numpy()}, c: {cu.detach().numpy()}, d: {du.detach().numpy()}"
     )
 
-    sigma_est = univariate_simulate(observations, au, bu, cu, du, sample_std)
+    if USE_SCALING:
+        sigma_est = univariate_simulate(
+            observations, au, bu, cu, du, sample_std
+        ).detach()
+        scaled_observations = observations / sigma_est
+        scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
+    else:
+        sigma_est = None
+        scaled_observations = observations
+        scaled_h_bar = h_bar
 
     def multivariate_loss_closure():
         mv_optim.zero_grad()
+
+        # Do not use scaled observations here.
         loss = -multivariate_log_likelihood(
-            observations, a, b, c, d, h_bar, distribution, sigma_est=None
+            observations, a, b, c, d, scaled_h_bar, distribution, sigma=sigma_est
         )
         loss.backward()
         return loss
@@ -488,7 +520,7 @@ def run(
     optimize(mv_optim, multivariate_loss_closure)
 
     # Simulate one more time with optimal parameters.
-    h = multivariate_simulate(observations, a, b, c, d, h_bar)
+    h = multivariate_simulate(scaled_observations, a, b, c, d, scaled_h_bar)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
@@ -511,7 +543,9 @@ def run(
     print("transformations:\n", h)
 
     # Compute the final loss
-    ll = multivariate_conditional_log_likelihoods(observations, h, distribution)
+    ll = multivariate_conditional_log_likelihoods(
+        observations, h, distribution, sigma=None
+    )
 
     logging.info(f"Transformation estimates:\n{h}")
 
