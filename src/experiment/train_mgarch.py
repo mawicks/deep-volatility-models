@@ -18,7 +18,7 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-USE_SCALING = True
+USE_SCALING = False
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -29,6 +29,9 @@ MIN_CLAMP = -MAX_CLAMP
 
 DEFAULT_SEED = 42
 
+normal_distribution = torch.distributions.normal.Normal(
+    loc=torch.tensor(0.0), scale=torch.tensor(1.0)
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,7 +82,7 @@ def make_diagonal_nonnegative(m):
     return m * diag_signs
 
 
-def random_lower_triangular(n, scale=1.0, requires_grad=True):
+def random_lower_triangular(n, scale=1.0, requires_grad=True, device=None):
     scale = torch.tensor(scale, device=device)
     m = torch.rand(n, n, device=device) - 0.5
     m = scale * make_diagonal_nonnegative(torch.tril(m))
@@ -87,48 +90,7 @@ def random_lower_triangular(n, scale=1.0, requires_grad=True):
     return m
 
 
-def initial_univariate_parameters(n, device=None):
-    a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.ones(n, device=device)
-    b = DECAY_FOR_INITIALIZATION * torch.ones(n, device=device)
-    c = torch.ones(n, device=device)
-    d = torch.ones(n, device=device)
-
-    for m in (a, b, c, d):
-        m.requires_grad = True
-
-    return a, b, c, d
-
-
-def initial_multivariate_parameters(n, device=None):
-    # Initialize a and b as simple multiples of the identity
-    a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=device)
-    b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=device)
-
-    # c is triangular
-    c = random_lower_triangular(n, 0.01, False)
-    d = torch.eye(n, device=device)
-
-    if DIAGONAL_MODEL:
-        a = torch.diag(torch.diag(a))
-        b = torch.diag(torch.diag(b))
-        c = torch.diag(torch.diag(c))
-        d = torch.diag(torch.diag(d))
-
-    # We set requires_grad here so that the preceeding diags and tril calls
-    # aren't subject to differentiation
-
-    for t in [a, b, c, d]:
-        t.requires_grad = True
-
-    return a, b, c, d
-
-
-normal_distribution = torch.distributions.normal.Normal(
-    loc=torch.tensor(0.0), scale=torch.tensor(1.0)
-)
-
-
-def marginal_conditional_log_likelihoods(observations, sigma, distribution):
+def marginal_conditional_log_likelihood(observations, sigma, distribution):
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
@@ -157,7 +119,7 @@ def marginal_conditional_log_likelihoods(observations, sigma, distribution):
     return torch.mean(torch.sum(ll, dim=1))
 
 
-def multivariate_conditional_log_likelihoods(
+def joint_conditional_log_likelihood(
     observations, transformations, distribution, sigma=None
 ):
     """
@@ -215,172 +177,331 @@ def multivariate_conditional_log_likelihoods(
     return torch.mean(ll)
 
 
-def univariate_simulate(
-    observations: torch.Tensor,
-    a: torch.Tensor,
-    b: torch.Tensor,
-    c: torch.Tensor,
-    d: torch.Tensor,
-    sample_std: torch.Tensor,
-):
-    """Given a, b, c, d, and observations, generate the *estimated*
-    standard deviations (marginal) for each observation
-
-    Argument:
-        observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
-        a: torch.Tensor of dimension n_symbols which is the AR coefficient for each symbol
-        b: torch.Tensor of dimension n_symbols which is the MA coefficient for each symbol
-        c: torch.Tensor of dimension n_symbols which is the coefficient of sample_std.
-           The product of the two is used for the constant term
-        d: torch.Tensor of dimension n_symbols which is the coefficient of sample_std.
-           The product of the two is used as the initial state.
-
-    """
-    sigma_t = d * sample_std
-    sigma_sequence = []
-
-    for k, o in enumerate(observations):
-        # Store the current ht before predicting next one
-        sigma_sequence.append(sigma_t)
-
-        # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_std)**2
-        # While searching over the parameter space, an unstable value for `a` may be tested.
-        # Clamp to prevent it from overflowing.
-        a_sigma = torch.clamp(a * sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
-        b_o = b * o
-        c_sample_std = c * sample_std
-
-        # To avoid numerical issues associated with expressions of the form
-        # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
-        # case, which is to stack the variables (a, b, c) vertically and take
-        # the column norms.  We depend on the vector_norm()
-        # implementation being stable.
-
-        m = torch.stack((a_sigma, b_o, c_sample_std), axis=0)
-        sigma_t = torch.linalg.vector_norm(m, dim=0)
-
-    sigma = torch.stack(sigma_sequence)
-    return sigma
-
-
-def multivariate_simulate(
-    observations: torch.Tensor,
-    a: torch.Tensor,
-    b: torch.Tensor,
-    c: torch.Tensor,
-    d: torch.Tensor,
-    h_bar: torch.Tensor,
-):
-    """Given a, b, c, d, and observations, generate the *estimated*
-    lower triangular square roots of the sequence of covariance matrix estimates.
-
-    Argument:
-        observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
-        a: torch.Tensor of dimension (n_symbols, n_symbols) which is the AR coefficient
-        b: torch.Tensor of dimension (n_symbols, n_symbols)  which is the MA coefficient
-        c: torch.Tensor of dimension (n_symbols, n_symbols) which is the coefficient of h_bar.
-           The product of the two is used for the constant term
-        d: torch.Tensor of dimension n_symbosl which is the coefficient of sample_std
-           The product of the two used as the initial state.
-
-    """
-    ht = d @ h_bar
-    h_sequence = []
-
-    for k, o in enumerate(observations):
-        # Store the current ht before predicting next one
-        h_sequence.append(ht)
-
-        # While searching over the parameter space, an unstable value for `a` may be tested.
-        # Clamp to prevent it from overflowing.
-
-        a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
-        b_o = (b @ o).unsqueeze(1)
-
-        # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ h_bar) @ (c @ h_bar).T
-        # Unnecessary squaring is discouraged for nunerical stability.
-        # Instead, we use only square roots and never explicity
-        # compute the covariance.  This is a common 'trick' achieved
-        # by concatenating the square roots in a larger array and
-        # computing the QR factoriation, which computes the square
-        # root of the sum of squares.  The covariance matrix isn't
-        # formed explicitly in this code except at the very end when
-        # it's time to return the covariance matrices to the user.
-
-        m = torch.cat((a_ht, b_o, c @ h_bar), axis=1)
-
-        # Unfortunately there's no QL factorization in PyTorch so we
-        # transpose m and use the QR.  We only need the 'R' return
-        # value, so the Q return value is dropped.
-
-        ht_t = torch.linalg.qr(m.T, mode="reduced")[1]
-
-        # Transpose ht to get the lower triangular version.
-
-        ht = make_diagonal_nonnegative(ht_t.T)
-
-    h = torch.stack(h_sequence)
-    return h
-
-
-def univariate_log_likelihood(observations, a, b, c, d, sample_std, distribution):
-    logging.debug(f"uv likelihood: a:\n{a}")
-    logging.debug(f"uv likelihood: b:\n{b}")
-    logging.debug(f"uv likelihood: c:\n{c}")
-    logging.debug(f"uv likelihood: d:\n{c}")
-
-    sigma = univariate_simulate(observations, a, b, c, d, sample_std)
-
-    if sigma is not None:
-        mean_ll = marginal_conditional_log_likelihoods(
-            observations, sigma, distribution
+def optimize(optim, closure):
+    best_loss = float("inf")
+    done = False
+    logging.info("Starting optimization")
+    while not done:
+        optim.step(closure)
+        current_loss = closure()
+        logging.info(
+            f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
         )
-    else:
-        mean_ll = torch.tensor(float("-inf"), requires_grad=True)
+        if float(current_loss) < best_loss:
+            best_loss = current_loss
+        else:
+            logging.info("Finished")
+            done = True
 
-    return mean_ll
+
+class UnivariateARCHModel:
+    def __init__(self, distribution=normal_distribution, device=None):
+        self.a = self.b = self.c = self.d = None
+        self.sample_std = None
+        self.distribution = distribution
+        self.device = device
+
+    def initialize_parameters(self, n):
+        self.a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.ones(n, device=self.device)
+        self.b = DECAY_FOR_INITIALIZATION * torch.ones(n, device=self.device)
+        self.c = torch.ones(n, device=self.device)
+        self.d = torch.ones(n, device=self.device)
+
+        for m in (self.a, self.b, self.c, self.d):
+            m.requires_grad = True
+
+    def __simulate(
+        self,
+        observations: torch.Tensor,
+    ):
+        """Given a, b, c, d, and observations, generate the *estimated*
+        standard deviations (marginal) for each observation
+
+        Argument:
+            observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+
+        """
+        sigma_t = self.d * self.sample_std
+        sigma_sequence = []
+
+        for k, o in enumerate(observations):
+            # Store the current ht before predicting next one
+            sigma_sequence.append(sigma_t)
+
+            # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_std)**2
+            # While searching over the parameter space, an unstable value for `a` may be tested.
+            # Clamp to prevent it from overflowing.
+            a_sigma = torch.clamp(self.a * sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
+            b_o = self.b * o
+            c_sample_std = self.c * self.sample_std
+
+            # To avoid numerical issues associated with expressions of the form
+            # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
+            # case, which is to stack the variables (a, b, c) vertically and take
+            # the column norms.  We depend on the vector_norm()
+            # implementation being stable.
+
+            m = torch.stack((a_sigma, b_o, c_sample_std), axis=0)
+            sigma_t = torch.linalg.vector_norm(m, dim=0)
+
+        sigma = torch.stack(sigma_sequence)
+        return sigma
+
+    def __mean_log_likelihood(self, observations):
+        """
+        This computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        """
+        sigma = self.__simulate(observations)
+        mean_ll = marginal_conditional_log_likelihood(
+            observations, sigma, self.distribution
+        )
+        return mean_ll
+
+    def fit(self, observations):
+        n = observations.shape[1]
+
+        self.initialize_parameters(n)
+        logging.debug(f"a:\n{self.a}")
+        logging.debug(f"b:\n{self.b}")
+        logging.debug(f"c:\n{self.c}")
+        logging.debug(f"d:\n{self.d}")
+
+        self.sample_std = torch.std(observations, dim=0)
+        logging.info(f"sample_std:\n{self.sample_std}")
+
+        optim = torch.optim.LBFGS(
+            [self.a, self.b, self.c, self.d],
+            max_iter=PROGRESS_ITERATIONS,
+            lr=LEARNING_RATE,
+            line_search_fn="strong_wolfe",
+        )
+
+        def loss_closure():
+            optim.zero_grad()
+            loss = -self.__mean_log_likelihood(observations)
+            loss.backward()
+            return loss
+
+        optimize(optim, loss_closure)
+        logging.info(
+            f"a: {self.a.detach().numpy()}, b: {self.b.detach().numpy()}, c: {self.c.detach().numpy()}, d: {self.d.detach().numpy()}"
+        )
+
+    def simulate(
+        self,
+        observations: torch.Tensor,
+    ):
+        """
+        This is the inference version of simulate(), which is the version clients would normally use.
+        It doesn't compute any gradient information, so it should be faster.
+        """
+        with torch.no_grad():
+            sigma = self.__simulate(observations)
+
+        return sigma
+
+    def mean_log_likelihood(self, observations):
+        """
+        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
+        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        """
+        with torch.no_grad():
+            result = self.__mean_log_likelihood(observations, self.sample_std)
+
+        return result
 
 
-def multivariate_log_likelihood(
-    observations, a, b, c, d, h_bar, distribution, sigma=None
-):
+class MultivariateARCHModel:
+    def __init__(self, distribution=normal_distribution, device=None):
+        self.a = self.b = self.c = self.d = None
+        self.distribution = distribution
+        self.device = device
 
-    # Running through a tril() will force autograd to compute a zero gradient
-    # for the upper triangular portion so that those entries are ignored.
-    a = torch.tril(a)
-    b = torch.tril(b)
-    c = torch.tril(c)
-    d = torch.tril(d)
+    def initialize_parameters(self, n):
+        # Initialize a and b as simple multiples of the identity
+        self.a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=self.device)
+        self.b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=self.device)
 
-    if DIAGONAL_MODEL:
-        a = torch.diag(torch.diag(a))
-        b = torch.diag(torch.diag(b))
-        c = torch.diag(torch.diag(c))
-        d = torch.diag(torch.diag(d))
+        # c is triangular
+        self.c = random_lower_triangular(n, 0.01, False, device=device)
+        self.d = torch.eye(n, device=device)
 
-    logging.debug(f"likelihood: a:\n{a}")
-    logging.debug(f"likelihood: b:\n{b}")
-    logging.debug(f"likelihood: c:\n{c}")
-    logging.debug(f"likelihood: d:\n{c}")
+        if DIAGONAL_MODEL:
+            self.a = torch.diag(torch.diag(self.a))
+            self.b = torch.diag(torch.diag(self.b))
+            self.c = torch.diag(torch.diag(self.c))
+            self.d = torch.diag(torch.diag(self.d))
 
-    # When sigma is not None, h_bar should also be normalized
-    # so that its row norms are one.
+        # We set requires_grad here so that the preceeding diags and tril calls
+        # aren't subject to differentiation
 
-    if sigma is not None:
-        scaled_observations = observations / sigma
-        # scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
-    else:
-        scaled_observations = observations
-        # scaled_h_bar = h_bar
+        for t in [self.a, self.b, self.c, self.d]:
+            t.requires_grad = True
 
-    h = multivariate_simulate(scaled_observations, a, b, c, d, h_bar)
+    def __simulate(
+        self,
+        observations: torch.Tensor,
+    ):
+        """Given a, b, c, d, and observations, generate the *estimated*
+        lower triangular square roots of the sequence of covariance matrix estimates.
 
-    # It's important to use non-scaled observations in likelihood function
-    mean_ll = multivariate_conditional_log_likelihoods(
-        observations, h, distribution, sigma=sigma
-    )
+        Argument:
+            observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        """
+        a = torch.tril(self.a)
+        b = torch.tril(self.b)
+        c = torch.tril(self.c)
+        d = torch.tril(self.d)
 
-    return mean_ll
+        if DIAGONAL_MODEL:
+            a = torch.diag(torch.diag(self.a))
+            b = torch.diag(torch.diag(self.b))
+            c = torch.diag(torch.diag(self.c))
+            d = torch.diag(torch.diag(self.d))
+
+        ht = d @ self.h_bar
+        h_sequence = []
+
+        for k, o in enumerate(observations):
+            # Store the current ht before predicting next one
+            h_sequence.append(ht)
+
+            # While searching over the parameter space, an unstable value for `a` may be tested.
+            # Clamp to prevent it from overflowing.
+
+            a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
+            b_o = (b @ o).unsqueeze(1)
+
+            # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ h_bar) @ (c @ h_bar).T
+            # Unnecessary squaring is discouraged for nunerical stability.
+            # Instead, we use only square roots and never explicity
+            # compute the covariance.  This is a common 'trick' achieved
+            # by concatenating the square roots in a larger array and
+            # computing the QR factoriation, which computes the square
+            # root of the sum of squares.  The covariance matrix isn't
+            # formed explicitly in this code except at the very end when
+            # it's time to return the covariance matrices to the user.
+
+            m = torch.cat((a_ht, b_o, c @ self.h_bar), axis=1)
+
+            # Unfortunately there's no QL factorization in PyTorch so we
+            # transpose m and use the QR.  We only need the 'R' return
+            # value, so the Q return value is dropped.
+
+            ht_t = torch.linalg.qr(m.T, mode="reduced")[1]
+
+            # Transpose ht to get the lower triangular version.
+
+            ht = make_diagonal_nonnegative(ht_t.T)
+
+        h = torch.stack(h_sequence)
+        return h
+
+    def __mean_log_likelihood(self, observations, sigma=None):
+        """
+        This computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        """
+        # Running through a tril() will force autograd to compute a zero gradient
+        # for the upper triangular portion so that those entries are ignored.
+        # When sigma is not None, h_bar should also be normalized
+        # so that its row norms are one.
+
+        if sigma is not None:
+            scaled_observations = observations / sigma
+        else:
+            scaled_observations = observations
+
+        h = self.__simulate(scaled_observations)
+
+        # It's important to use non-scaled observations in likelihood function
+        mean_ll = joint_conditional_log_likelihood(
+            observations, h, self.distribution, sigma=sigma
+        )
+
+        return mean_ll
+
+    def fit(self, observations):
+        n = observations.shape[1]
+
+        self.initialize_parameters(n)
+        logging.debug(f"a:\n{self.a}")
+        logging.debug(f"b:\n{self.b}")
+        logging.debug(f"c:\n{self.c}")
+        logging.debug(f"d:\n{self.d}")
+
+        self.h_bar = (torch.linalg.qr(observations, mode="reduced")[1]).T / torch.sqrt(
+            torch.tensor(observations.shape[0])
+        )
+        self.h_bar = make_diagonal_nonnegative(self.h_bar)
+
+        if USE_SCALING:
+            self.h_bar = torch.nn.functional.normalize(self.h_bar, dim=1)
+
+        logging.info(f"h_bar:\n{self.h_bar}")
+
+        optim = torch.optim.LBFGS(
+            [self.a, self.b, self.c, self.d],
+            max_iter=PROGRESS_ITERATIONS,
+            lr=LEARNING_RATE,
+            line_search_fn="strong_wolfe",
+        )
+
+        if USE_SCALING:
+            self.univariate_model = UnivariateARCHModel(device=device)
+            self.univariate_model.fit(observations)
+            sigma_est = self.univariate_model.simulate(observations)
+        else:
+            sigma_est = None
+
+        def loss_closure():
+            optim.zero_grad()
+
+            # Do not use scaled observations here.
+            loss = -self.__mean_log_likelihood(observations, sigma=sigma_est)
+            loss.backward()
+
+            return loss
+
+        optimize(optim, loss_closure)
+        logging.info(
+            f"a: {self.a.detach().numpy()}, b: {self.b.detach().numpy()}, c: {self.c.detach().numpy()}, d: {self.d.detach().numpy()}"
+        )
+
+        logging.debug("Gradients: ")
+        logging.debug(f"a.grad:\n{self.a.grad}")
+        logging.debug(f"b.grad:\n{self.b.grad}")
+        logging.debug(f"c.grad:\n{self.c.grad}")
+        logging.debug(f"d.grad:\n{self.d.grad}")
+
+    def simulate(
+        self,
+        observations: torch.Tensor,
+    ):
+        """
+        This is the inference version of simulate(), which is the version clients would normally use.
+        It doesn't compute any gradient information, so it should be faster.
+        """
+        if USE_SCALING:
+            sigma_est = self.univariate_model.simulate(observations)
+            scaled_observations = observations / sigma_est
+        else:
+            sigma_est = None
+            scaled_observations = observations
+
+        with torch.no_grad():
+            result = self.__simulate(scaled_observations)
+
+        return result
+
+    def mean_log_likelihood(self, observations, sigma=None):
+        """
+        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
+        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        """
+        with torch.no_grad():
+            result = self.__mean_log_likelihood(observations, sigma)
+
+        return result
 
 
 def run(
@@ -432,94 +553,15 @@ def run(
     observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
-    a, b, c, d = initial_multivariate_parameters(len(symbols), device=device)
-    logging.debug(f"a:\n{a}")
-    logging.debug(f"b:\n{b}")
-    logging.debug(f"c:\n{c}")
-    logging.debug(f"d:\n{d}")
-
-    au, bu, cu, du = initial_univariate_parameters(len(symbols), device=device)
-    logging.debug(f"au:\n{au}")
-    logging.debug(f"bu:\n{bu}")
-    logging.debug(f"cu:\n{cu}")
-    logging.debug(f"du:\n{du}")
-
-    h_bar = (torch.linalg.qr(observations, mode="reduced")[1]).T / torch.sqrt(
-        torch.tensor(observations.shape[0])
-    )
-    h_bar = make_diagonal_nonnegative(h_bar)
-    logging.info(f"h_bar:\n{h_bar}")
-
-    sample_std = torch.std(observations, dim=0)
-    logging.info(f"sample_std:\n{sample_std}")
-
-    uv_optim = torch.optim.LBFGS(
-        [au, bu, cu, du],
-        max_iter=PROGRESS_ITERATIONS,
-        lr=LEARNING_RATE,
-        line_search_fn="strong_wolfe",
-    )
-
-    mv_optim = torch.optim.LBFGS(
-        [a, b, c, d],
-        max_iter=PROGRESS_ITERATIONS,
-        lr=LEARNING_RATE,
-        line_search_fn="strong_wolfe",
-    )
-
-    def univariate_loss_closure():
-        uv_optim.zero_grad()
-        loss = -univariate_log_likelihood(
-            observations, au, bu, cu, du, sample_std, distribution
-        )
-        loss.backward()
-        return loss
-
-    def optimize(optim, closure):
-        best_loss = float("inf")
-        done = False
-        logging.info("Starting optimization")
-        while not done:
-            optim.step(closure)
-            current_loss = closure()
-            logging.info(
-                f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
-            )
-            if float(current_loss) < best_loss:
-                best_loss = current_loss
-            else:
-                logging.info("Finished")
-                done = True
-
-    optimize(uv_optim, univariate_loss_closure)
-    logging.info(
-        f"a: {au.detach().numpy()}, b: {bu.detach().numpy()}, c: {cu.detach().numpy()}, d: {du.detach().numpy()}"
-    )
-
     if USE_SCALING:
-        with torch.no_grad():
-            sigma_est = univariate_simulate(observations, au, bu, cu, du, sample_std)
-            scaled_observations = observations / sigma_est
-            scaled_h_bar = torch.nn.functional.normalize(h_bar, dim=1)
-    else:
-        sigma_est = None
-        scaled_observations = observations
-        scaled_h_bar = h_bar
+        univariate_model = UnivariateARCHModel(device=device)
+        univariate_model.fit(observations)
 
-    def multivariate_loss_closure():
-        mv_optim.zero_grad()
-
-        # Do not use scaled observations here.
-        loss = -multivariate_log_likelihood(
-            observations, a, b, c, d, scaled_h_bar, distribution, sigma=sigma_est
-        )
-        loss.backward()
-        return loss
-
-    optimize(mv_optim, multivariate_loss_closure)
+    multivariate_model = MultivariateARCHModel(device=device)
+    multivariate_model.fit(observations)
 
     # Simulate one more time with optimal parameters.
-    h = multivariate_simulate(scaled_observations, a, b, c, d, scaled_h_bar)
+    h = multivariate_model.simulate(observations)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
@@ -542,24 +584,11 @@ def run(
     print("transformations:\n", h)
 
     # Compute the final loss
-    ll = multivariate_conditional_log_likelihoods(
-        observations, h, distribution, sigma=None
-    )
+    ll = joint_conditional_log_likelihood(observations, h, distribution, sigma=None)
 
     logging.info(f"Transformation estimates:\n{h}")
 
-    logging.info(f"AR matrix a:\n{a}")
-    logging.info(f"MA matrix b:\n{b}")
-    logging.info(f"h_bar multiplier for constant term c:\n{c}")
-    logging.info(f"h_bar multiplier for initial estimate d:\n{d}")
-
     logging.info(f"**** Final likelihood (per sample): {ll:.4f} ****")
-
-    logging.debug("Gradients: ")
-    logging.debug(f"a.grad:\n{a.grad}")
-    logging.debug(f"b.grad:\n{b.grad}")
-    logging.debug(f"c.grad:\n{c.grad}")
-    logging.debug(f"d.grad:\n{d.grad}")
 
 
 @click.command()
