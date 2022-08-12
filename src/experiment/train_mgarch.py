@@ -18,7 +18,7 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-USE_SCALING = False
+USE_SCALING = True
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -338,16 +338,7 @@ class MultivariateARCHModel:
         for t in [self.a, self.b, self.c, self.d]:
             t.requires_grad = True
 
-    def __simulate(
-        self,
-        observations: torch.Tensor,
-    ):
-        """Given a, b, c, d, and observations, generate the *estimated*
-        lower triangular square roots of the sequence of covariance matrix estimates.
-
-        Argument:
-            observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
-        """
+    def __constrain_parameters(self):
         a = torch.tril(self.a)
         b = torch.tril(self.b)
         c = torch.tril(self.c)
@@ -358,6 +349,20 @@ class MultivariateARCHModel:
             b = torch.diag(torch.diag(self.b))
             c = torch.diag(torch.diag(self.c))
             d = torch.diag(torch.diag(self.d))
+
+        return a, b, c, d
+
+    def __simulate(
+        self,
+        observations: torch.Tensor,
+    ):
+        """Given a, b, c, d, and observations, generate the *estimated*
+        lower triangular square roots of the sequence of covariance matrix estimates.
+
+        Argument:
+            observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        """
+        a, b, c, d = self.__constrain_parameters()
 
         ht = d @ self.h_bar
         h_sequence = []
@@ -451,6 +456,7 @@ class MultivariateARCHModel:
             self.univariate_model.fit(observations)
             sigma_est = self.univariate_model.simulate(observations)
         else:
+            self.univariate_model = None
             sigma_est = None
 
         def loss_closure():
@@ -481,17 +487,17 @@ class MultivariateARCHModel:
         This is the inference version of simulate(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
-        if USE_SCALING:
-            sigma_est = self.univariate_model.simulate(observations)
-            scaled_observations = observations / sigma_est
-        else:
-            sigma_est = None
-            scaled_observations = observations
-
         with torch.no_grad():
+            if self.univariate_model is not None:
+                sigma_est = self.univariate_model.simulate(observations)
+                scaled_observations = observations / sigma_est
+            else:
+                sigma_est = None
+                scaled_observations = observations
+
             result = self.__simulate(scaled_observations)
 
-        return result
+        return result, sigma_est
 
     def mean_log_likelihood(self, observations, sigma=None):
         """
@@ -561,11 +567,12 @@ def run(
     multivariate_model.fit(observations)
 
     # Simulate one more time with optimal parameters.
-    h = multivariate_model.simulate(observations)
+    h, sigma_est = multivariate_model.simulate(observations)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
     variance = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
+
     inverse_variance = torch.diag_embed(variance ** (-1), dim1=1, dim2=2)
     correlation = inverse_variance @ covariance @ inverse_variance
 
