@@ -18,7 +18,6 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-USE_SCALING = False
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -522,6 +521,7 @@ def run(
     end_date=None,
     eval_start_date=None,
     eval_end_date=None,
+    use_univariate=False,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -534,6 +534,7 @@ def run(
     logging.info(f"End date: {end_date}")
     logging.info(f"Evaluation/termination start date: {eval_start_date}")
     logging.info(f"Evaluation/termination end date: {eval_end_date}")
+    logging.info(f"Use univariate: {use_univariate}")
 
     distribution = normal_distribution
 
@@ -562,7 +563,7 @@ def run(
     observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
-    if USE_SCALING:
+    if use_univariate:
         univariate_model = UnivariateARCHModel(device=device)
         univariate_model.fit(observations)
     else:
@@ -647,6 +648,13 @@ def run(
     type=click.DateTime(formats=["%Y-%m-%d"]),
     help="Last date of data used for evaluation/termination",
 )
+@click.option(
+    "--use-univariate",
+    is_flag=True,
+    default=None,
+    show_default=True,
+    help="Use a univariate 'garchs' as a prescalar",
+)
 def main_cli(
     use_hsmd,
     symbol,
@@ -656,6 +664,7 @@ def main_cli(
     end_date,
     eval_start_date,
     eval_end_date,
+    use_univariate,
 ):
 
     if start_date:
@@ -673,6 +682,7 @@ def main_cli(
         end_date=end_date,
         eval_start_date=eval_start_date,
         eval_end_date=eval_end_date,
+        use_univariate=use_univariate,
     )
 
 
