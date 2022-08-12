@@ -18,7 +18,7 @@ from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
 DEBUG = False
-USE_SCALING = True
+USE_SCALING = False
 PROGRESS_ITERATIONS = 20
 DIAGONAL_MODEL = False
 DECAY_FOR_INITIALIZATION = 0.30
@@ -312,10 +312,14 @@ class UnivariateARCHModel:
 
 
 class MultivariateARCHModel:
-    def __init__(self, distribution=normal_distribution, device=None):
-        self.a = self.b = self.c = self.d = None
+    def __init__(
+        self, univariate_model=None, distribution=normal_distribution, device=None
+    ):
+        self.univariate_model = univariate_model
         self.distribution = distribution
         self.device = device
+
+        self.a = self.b = self.c = self.d = None
 
     def initialize_parameters(self, n):
         # Initialize a and b as simple multiples of the identity
@@ -439,7 +443,7 @@ class MultivariateARCHModel:
         )
         self.h_bar = make_diagonal_nonnegative(self.h_bar)
 
-        if USE_SCALING:
+        if self.univariate_model is not None:
             self.h_bar = torch.nn.functional.normalize(self.h_bar, dim=1)
 
         logging.info(f"h_bar:\n{self.h_bar}")
@@ -451,8 +455,7 @@ class MultivariateARCHModel:
             line_search_fn="strong_wolfe",
         )
 
-        if USE_SCALING:
-            self.univariate_model = UnivariateARCHModel(device=device)
+        if self.univariate_model:
             self.univariate_model.fit(observations)
             sigma_est = self.univariate_model.simulate(observations)
         else:
@@ -562,8 +565,12 @@ def run(
     if USE_SCALING:
         univariate_model = UnivariateARCHModel(device=device)
         univariate_model.fit(observations)
+    else:
+        univariate_model = None
 
-    multivariate_model = MultivariateARCHModel(device=device)
+    multivariate_model = MultivariateARCHModel(
+        univariate_model=univariate_model, device=device
+    )
     multivariate_model.fit(observations)
 
     # Simulate one more time with optimal parameters.
