@@ -25,7 +25,7 @@ normal_distribution = torch.distributions.normal.Normal(
 )
 
 
-class Parameterization(Enum):
+class ParameterConstraint(Enum):
     SCALAR = "scalar"
     DIAGONAL = "diagonal"
     TRIANGULAR = "triangular"
@@ -274,12 +274,12 @@ class UnivariateARCHModel:
 class MultivariateARCHModel:
     def __init__(
         self,
-        parameterization=Parameterization.FULL,
+        constraint=ParameterConstraint.FULL,
         univariate_model=None,
         distribution=normal_distribution,
         device=None,
     ):
-        self.parameterization = parameterization
+        self.constraint = constraint
         self.univariate_model = univariate_model
         self.distribution = distribution
         self.device = device
@@ -295,7 +295,7 @@ class MultivariateARCHModel:
         self.c = random_lower_triangular(n, 0.01, False, device=self.device)
         self.d = torch.eye(n, device=self.device)
 
-        if self.parameterization == Parameterization.DIAGONAL:
+        if self.constraint == ParameterConstraint.DIAGONAL:
             self.a = torch.diag(torch.diag(self.a))
             self.b = torch.diag(torch.diag(self.b))
             self.c = torch.diag(torch.diag(self.c))
@@ -308,12 +308,12 @@ class MultivariateARCHModel:
             t.requires_grad = True
 
     def __constrain_parameters(self):
-        if self.parameterization == Parameterization.TRIANGULAR:
+        if self.constraint == ParameterConstraint.TRIANGULAR:
             a = torch.tril(self.a)
             b = torch.tril(self.b)
             c = torch.tril(self.c)
             d = torch.tril(self.d)
-        elif self.parameterization == Parameterization.DIAGONAL:
+        elif self.constraint == ParameterConstraint.DIAGONAL:
             a = torch.diag(torch.diag(self.a))
             b = torch.diag(torch.diag(self.b))
             c = torch.diag(torch.diag(self.c))

@@ -12,7 +12,11 @@ import pandas as pd
 import torch
 
 # Local imports
-from mgarch_models import UnivariateARCHModel, MultivariateARCHModel
+from mgarch_models import (
+    UnivariateARCHModel,
+    MultivariateARCHModel,
+    ParameterConstraint,
+)
 
 from deep_volatility_models import data_sources
 from deep_volatility_models import stock_data
@@ -69,6 +73,7 @@ def run(
     eval_start_date=None,
     eval_end_date=None,
     use_univariate=False,
+    constraint=ParameterConstraint.FULL,
 ):
     # Rewrite symbols with deduped, uppercase versions
     symbols = list(map(str.upper, set(symbols)))
@@ -114,7 +119,9 @@ def run(
         univariate_model = None
 
     multivariate_model = MultivariateARCHModel(
-        univariate_model=univariate_model, device=device
+        univariate_model=univariate_model,
+        constraint=constraint,
+        device=device,
     )
     multivariate_model.fit(observations)
 
@@ -199,6 +206,15 @@ def run(
     show_default=True,
     help="Use a univariate 'garchs' as a prescalar",
 )
+@click.option(
+    "--constraint",
+    "-c",
+    type=click.Choice(
+        ["full", "triangular", "diagonal", "scalar"], case_sensitive=False
+    ),
+    default="full",
+    help="Type of constraint to be applied to multivariate parameters.",
+)
 def main_cli(
     use_hsmd,
     symbol,
@@ -209,7 +225,18 @@ def main_cli(
     eval_start_date,
     eval_end_date,
     use_univariate,
+    constraint,
 ):
+
+    constraints = {
+        p.value: p
+        for p in [
+            ParameterConstraint.FULL,
+            ParameterConstraint.TRIANGULAR,
+            ParameterConstraint.DIAGONAL,
+            ParameterConstraint.SCALAR,
+        ]
+    }
 
     if start_date:
         start_date = start_date.date()
@@ -227,6 +254,7 @@ def main_cli(
         eval_start_date=eval_start_date,
         eval_end_date=eval_end_date,
         use_univariate=use_univariate,
+        constraint=constraints[constraint],
     )
 
 
