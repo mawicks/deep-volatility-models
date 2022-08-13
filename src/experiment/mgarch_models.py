@@ -198,13 +198,10 @@ class UnivariateARCHModel:
         self.device = device
 
     def initialize_parameters(self, n):
-        self.a = (1.0 - INITIAL_DECAY) * torch.ones(n, device=self.device)
-        self.b = INITIAL_DECAY * torch.ones(n, device=self.device)
-        self.c = torch.ones(n, device=self.device)
-        self.d = torch.ones(n, device=self.device)
-
-        for m in (self.a, self.b, self.c, self.d):
-            m.requires_grad = True
+        self.a = DiagonalParameter(n, 1.0 - INITIAL_DECAY, device=self.device)
+        self.b = DiagonalParameter(n, INITIAL_DECAY, device=self.device)
+        self.c = DiagonalParameter(n, 1.0, device=self.device)
+        self.d = DiagonalParameter(n, 1.0, device=self.device)
 
     def __simulate(
         self,
@@ -217,7 +214,7 @@ class UnivariateARCHModel:
             observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
 
         """
-        sigma_t = self.d * self.sample_std
+        sigma_t = self.d @ self.sample_std
         sigma_sequence = []
 
         for k, o in enumerate(observations):
@@ -227,9 +224,9 @@ class UnivariateARCHModel:
             # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_std)**2
             # While searching over the parameter space, an unstable value for `a` may be tested.
             # Clamp to prevent it from overflowing.
-            a_sigma = torch.clamp(self.a * sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
-            b_o = self.b * o
-            c_sample_std = self.c * self.sample_std
+            a_sigma = torch.clamp(self.a @ sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
+            b_o = self.b @ o
+            c_sample_std = self.c @ self.sample_std
 
             # To avoid numerical issues associated with expressions of the form
             # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
@@ -257,16 +254,16 @@ class UnivariateARCHModel:
         n = observations.shape[1]
 
         self.initialize_parameters(n)
-        logging.debug(f"a:\n{self.a}")
-        logging.debug(f"b:\n{self.b}")
-        logging.debug(f"c:\n{self.c}")
-        logging.debug(f"d:\n{self.d}")
+        logging.debug(f"a:\n{self.a.value}")
+        logging.debug(f"b:\n{self.b.value}")
+        logging.debug(f"c:\n{self.c.value}")
+        logging.debug(f"d:\n{self.d.value}")
 
         self.sample_std = torch.std(observations, dim=0)
         logging.info(f"sample_std:\n{self.sample_std}")
 
         optim = torch.optim.LBFGS(
-            [self.a, self.b, self.c, self.d],
+            [self.a.value, self.b.value, self.c.value, self.d.value],
             max_iter=PROGRESS_ITERATIONS,
             lr=LEARNING_RATE,
             line_search_fn="strong_wolfe",
@@ -280,10 +277,10 @@ class UnivariateARCHModel:
 
         optimize(optim, loss_closure)
         logging.info(
-            f"a: {self.a.detach().numpy()}, "
-            f"b: {self.b.detach().numpy()}, "
-            f"c: {self.c.detach().numpy()}, "
-            f"d: {self.d.detach().numpy()}"
+            f"a: {self.a.value.detach().numpy()}, "
+            f"b: {self.b.value.detach().numpy()}, "
+            f"c: {self.c.value.detach().numpy()}, "
+            f"d: {self.d.value.detach().numpy()}"
         )
 
     def simulate(
@@ -341,25 +338,6 @@ class MultivariateARCHModel:
         self.c = self.parameter_factory(n, 0.01, device=self.device)
         self.d = self.parameter_factory(n, 1.0, device=self.device)
 
-    def __constrain_parameters(self):
-        if self.constraint == ParameterConstraint.TRIANGULAR:
-            a = torch.tril(self.a)
-            b = torch.tril(self.b)
-            c = torch.tril(self.c)
-            d = torch.tril(self.d)
-        elif self.constraint == ParameterConstraint.DIAGONAL:
-            a = torch.diag(torch.diag(self.a))
-            b = torch.diag(torch.diag(self.b))
-            c = torch.diag(torch.diag(self.c))
-            d = torch.diag(torch.diag(self.d))
-        else:
-            a = self.a
-            b = self.b
-            c = self.c
-            d = self.d
-
-        return a, b, c, d
-
     def __simulate(
         self,
         observations: torch.Tensor,
@@ -382,6 +360,7 @@ class MultivariateARCHModel:
 
             a_ht = torch.clamp(self.a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
             b_o = (self.b @ o).unsqueeze(1)
+            c_hbar = self.c @ self.h_bar
 
             # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ h_bar) @ (c @ h_bar).T
             # Unnecessary squaring is discouraged for nunerical stability.
@@ -393,7 +372,7 @@ class MultivariateARCHModel:
             # formed explicitly in this code except at the very end when
             # it's time to return the covariance matrices to the user.
 
-            m = torch.cat((a_ht, b_o, self.c @ self.h_bar), axis=1)
+            m = torch.cat((a_ht, b_o, c_hbar), axis=1)
 
             # Unfortunately there's no QL factorization in PyTorch so we
             # transpose m and use the QR.  We only need the 'R' return
