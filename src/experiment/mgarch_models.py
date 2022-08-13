@@ -12,7 +12,7 @@ import torch
 DEBUG = False
 PROGRESS_ITERATIONS = 20
 
-DECAY_FOR_INITIALIZATION = 0.30
+INITIAL_DECAY = 0.30
 LEARNING_RATE = 0.25
 
 MAX_CLAMP = 1e10
@@ -30,6 +30,42 @@ class ParameterConstraint(Enum):
     DIAGONAL = "diagonal"
     TRIANGULAR = "triangular"
     FULL = "full"
+
+
+class ScalarParameter:
+    def __init__(self, n: int, scale: float = 1.0, device=None):
+        self.value = scale * torch.tensor(1.0, device=device)
+        self.value.requires_grad = True
+
+    def __matmul__(self, other: torch.Tensor):
+        return self.value * other
+
+
+class DiagonalParameter:
+    def __init__(self, n: int, scale: float = 1.0, device=None):
+        self.value = scale * torch.ones(n, device=device)
+        self.value.requires_grad = True
+
+    def __matmul__(self, other: torch.Tensor):
+        return self.value * other
+
+
+class FullParameter:
+    def __init__(self, n: int, scale: float = 1.0, device=None):
+        self.value = scale * torch.eye(n, device=device)
+        self.value.requires_grad = True
+
+    def __matmul__(self, other: torch.Tensor):
+        return self.value @ other
+
+
+class TriangularParameter:
+    def __init__(self, n: int, scale: float = 1.0, device=None):
+        self.value = scale * torch.eye(n, device=device)
+        self.value.requires_grad = True
+
+    def __matmul__(self, other: torch.Tensor):
+        return torch.tril(self.value) @ other
 
 
 def make_diagonal_nonnegative(m):
@@ -162,8 +198,8 @@ class UnivariateARCHModel:
         self.device = device
 
     def initialize_parameters(self, n):
-        self.a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.ones(n, device=self.device)
-        self.b = DECAY_FOR_INITIALIZATION * torch.ones(n, device=self.device)
+        self.a = (1.0 - INITIAL_DECAY) * torch.ones(n, device=self.device)
+        self.b = INITIAL_DECAY * torch.ones(n, device=self.device)
         self.c = torch.ones(n, device=self.device)
         self.d = torch.ones(n, device=self.device)
 
@@ -244,7 +280,10 @@ class UnivariateARCHModel:
 
         optimize(optim, loss_closure)
         logging.info(
-            f"a: {self.a.detach().numpy()}, b: {self.b.detach().numpy()}, c: {self.c.detach().numpy()}, d: {self.d.detach().numpy()}"
+            f"a: {self.a.detach().numpy()}, "
+            f"b: {self.b.detach().numpy()}, "
+            f"c: {self.c.detach().numpy()}, "
+            f"d: {self.d.detach().numpy()}"
         )
 
     def simulate(
@@ -286,26 +325,21 @@ class MultivariateARCHModel:
 
         self.a = self.b = self.c = self.d = None
 
+        if constraint == ParameterConstraint.SCALAR:
+            self.parameter_factory = ScalarParameter
+        elif constraint == ParameterConstraint.DIAGONAL:
+            self.parameter_factory = DiagonalParameter
+        elif constraint == ParameterConstraint.TRIANGULAR:
+            self.parameter_factory = TriangularParameter
+        else:
+            self.parameter_factory = FullParameter
+
     def initialize_parameters(self, n):
         # Initialize a and b as simple multiples of the identity
-        self.a = (1.0 - DECAY_FOR_INITIALIZATION) * torch.eye(n, device=self.device)
-        self.b = DECAY_FOR_INITIALIZATION * torch.eye(n, device=self.device)
-
-        # c is triangular
-        self.c = random_lower_triangular(n, 0.01, False, device=self.device)
-        self.d = torch.eye(n, device=self.device)
-
-        if self.constraint == ParameterConstraint.DIAGONAL:
-            self.a = torch.diag(torch.diag(self.a))
-            self.b = torch.diag(torch.diag(self.b))
-            self.c = torch.diag(torch.diag(self.c))
-            self.d = torch.diag(torch.diag(self.d))
-
-        # We set requires_grad here so that the preceeding diags and tril calls
-        # aren't subject to differentiation
-
-        for t in [self.a, self.b, self.c, self.d]:
-            t.requires_grad = True
+        self.a = self.parameter_factory(n, 1.0 - INITIAL_DECAY, device=self.device)
+        self.b = self.parameter_factory(n, INITIAL_DECAY, device=self.device)
+        self.c = self.parameter_factory(n, 0.01, device=self.device)
+        self.d = self.parameter_factory(n, 1.0, device=self.device)
 
     def __constrain_parameters(self):
         if self.constraint == ParameterConstraint.TRIANGULAR:
@@ -336,9 +370,7 @@ class MultivariateARCHModel:
         Argument:
             observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
         """
-        a, b, c, d = self.__constrain_parameters()
-
-        ht = d @ self.h_bar
+        ht = self.d @ self.h_bar
         h_sequence = []
 
         for k, o in enumerate(observations):
@@ -348,8 +380,8 @@ class MultivariateARCHModel:
             # While searching over the parameter space, an unstable value for `a` may be tested.
             # Clamp to prevent it from overflowing.
 
-            a_ht = torch.clamp(a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
-            b_o = (b @ o).unsqueeze(1)
+            a_ht = torch.clamp(self.a @ ht, min=MIN_CLAMP, max=MAX_CLAMP)
+            b_o = (self.b @ o).unsqueeze(1)
 
             # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ h_bar) @ (c @ h_bar).T
             # Unnecessary squaring is discouraged for nunerical stability.
@@ -361,7 +393,7 @@ class MultivariateARCHModel:
             # formed explicitly in this code except at the very end when
             # it's time to return the covariance matrices to the user.
 
-            m = torch.cat((a_ht, b_o, c @ self.h_bar), axis=1)
+            m = torch.cat((a_ht, b_o, self.c @ self.h_bar), axis=1)
 
             # Unfortunately there's no QL factorization in PyTorch so we
             # transpose m and use the QR.  We only need the 'R' return
@@ -403,10 +435,10 @@ class MultivariateARCHModel:
         n = observations.shape[1]
 
         self.initialize_parameters(n)
-        logging.debug(f"a:\n{self.a}")
-        logging.debug(f"b:\n{self.b}")
-        logging.debug(f"c:\n{self.c}")
-        logging.debug(f"d:\n{self.d}")
+        logging.debug(f"a:\n{self.a.value}")
+        logging.debug(f"b:\n{self.b.value}")
+        logging.debug(f"c:\n{self.c.value}")
+        logging.debug(f"d:\n{self.d.value}")
 
         self.h_bar = (torch.linalg.qr(observations, mode="reduced")[1]).T / torch.sqrt(
             torch.tensor(observations.shape[0])
@@ -424,7 +456,7 @@ class MultivariateARCHModel:
         logging.info(f"h_bar:\n{self.h_bar}")
 
         optim = torch.optim.LBFGS(
-            [self.a, self.b, self.c, self.d],
+            [self.a.value, self.b.value, self.c.value, self.d.value],
             max_iter=PROGRESS_ITERATIONS,
             lr=LEARNING_RATE,
             line_search_fn="strong_wolfe",
@@ -440,15 +472,18 @@ class MultivariateARCHModel:
             return loss
 
         optimize(optim, loss_closure)
-        logging.info(
-            f"a: {self.a.detach().numpy()}\nb: {self.b.detach().numpy()}\nc: {self.c.detach().numpy()}\nd: {self.d.detach().numpy()}"
-        )
+
+        logging.info("Final Parameter Values")
+        logging.info(f"a: {self.a.value.detach().numpy()}")
+        logging.info(f"b: {self.b.value.detach().numpy()}")
+        logging.info(f"c: {self.c.value.detach().numpy()}")
+        logging.info(f"d: {self.d.value.detach().numpy()}")
 
         logging.debug("Gradients: ")
-        logging.debug(f"a.grad:\n{self.a.grad}")
-        logging.debug(f"b.grad:\n{self.b.grad}")
-        logging.debug(f"c.grad:\n{self.c.grad}")
-        logging.debug(f"d.grad:\n{self.d.grad}")
+        logging.debug(f"a.grad:\n{self.a.value.grad}")
+        logging.debug(f"b.grad:\n{self.b.value.grad}")
+        logging.debug(f"c.grad:\n{self.c.value.grad}")
+        logging.debug(f"d.grad:\n{self.d.value.grad}")
 
     def simulate(
         self,
