@@ -33,7 +33,7 @@ class ParameterConstraint(Enum):
 
 
 class ScalarParameter:
-    def __init__(self, n: int, scale: float = 1.0, device=None):
+    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
         self.value = scale * torch.tensor(1.0, device=device)
         self.value.requires_grad = True
 
@@ -42,7 +42,7 @@ class ScalarParameter:
 
 
 class DiagonalParameter:
-    def __init__(self, n: int, scale: float = 1.0, device=None):
+    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
         self.value = scale * torch.ones(n, device=device)
         self.value.requires_grad = True
 
@@ -51,7 +51,7 @@ class DiagonalParameter:
 
 
 class FullParameter:
-    def __init__(self, n: int, scale: float = 1.0, device=None):
+    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
         self.value = scale * torch.eye(n, device=device)
         self.value.requires_grad = True
 
@@ -60,17 +60,27 @@ class FullParameter:
 
 
 class TriangularParameter:
-    def __init__(self, n: int, scale: float = 1.0, device=None):
+    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
         self.value = scale * torch.eye(n, device=device)
         self.value.requires_grad = True
 
     def __matmul__(self, other: torch.Tensor):
+        # self.value was initialized to be triangular, so this
+        # torch.tril() may seem unnecessary.  Using the torch.tril()
+        # ensures that the upper entries remain excluded from gradient
+        # calculations and don't get updated by the optimizer.
         return torch.tril(self.value) @ other
 
 
-def make_diagonal_nonnegative(m):
+def make_diagonal_nonnegative(m: torch.Tensor):
     """Given a single lower triangular matrices m, return an `equivalent` matrix
     having non-negative diagonal entries.  Here `equivalent` means m@m.T is unchanged.
+
+    Arguments:
+        m: torch.Tensor of shape (n,n) that is lower triangular
+    Returns:
+        torch.Tensor: of shape (n, n) which is `equivalent` and has non-negative
+        values on its diagonal
     """
     diag = torch.diag(m)
     diag_signs = torch.ones(diag.shape)
@@ -78,7 +88,9 @@ def make_diagonal_nonnegative(m):
     return m * diag_signs
 
 
-def random_lower_triangular(n, scale=1.0, requires_grad=True, device=None):
+def random_lower_triangular(
+    n: int, scale: float = 1.0, requires_grad: bool = True, device: torch.device = None
+):
     scale = torch.tensor(scale, device=device)
     m = torch.rand(n, n, device=device) - 0.5
     m = scale * make_diagonal_nonnegative(torch.tril(m))
@@ -86,13 +98,14 @@ def random_lower_triangular(n, scale=1.0, requires_grad=True, device=None):
     return m
 
 
-def marginal_conditional_log_likelihood(observations, sigma, distribution):
+def marginal_conditional_log_likelihood(
+    observations: torch.Tensor, sigma: torch.Tensor, distribution: torch.Tensor
+):
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
        sigma: torch.Tensor of shape (n_obs, n_symbols)
            Contains the estimated univariate (marginal) standard deviation for each observation.
-
        distribution: torch.distributions.distribution.Distribution instance which should have a log_prob() method.
            Note we assume distrubution was constructed with center=0 and shape=1.  Any normalizing and recentering
            is achieved by explicit`transformations` here.
@@ -116,7 +129,10 @@ def marginal_conditional_log_likelihood(observations, sigma, distribution):
 
 
 def joint_conditional_log_likelihood(
-    observations, transformations, distribution, sigma=None
+    observations: torch.Tensor,
+    transformations: torch.Tensor,
+    distribution: torch.distributions.Distribution,
+    sigma=Union[torch.Tensor, None],
 ):
     """
     Arguments:
@@ -124,7 +140,7 @@ def joint_conditional_log_likelihood(
        transformations: torch.Tensor of shape (n_symbols, n_symbols)
            transformation is a lower-triangular matrix and the outcome is presumed
            to be z = transformation @ e where the elements of e are iid from distrbution.
-       distribution: torch.distributions.distribution.Distribution instance which should have a log_prob() method.
+       distribution: torch.distributions.Distribution or other object with a log_prob() method.
            Note we assume distrubution was constructed with center=0 and shape=1.  Any normalizing and recentering
            is achieved by explicit`transformations` here.
        sigma: torch.Tensor of shape (n_obj, n_symbols) or None.
@@ -137,7 +153,7 @@ def joint_conditional_log_likelihood(
 
 
     Returns:
-       torch.Tensor - log_likelihood"""
+       torch.Tensor - the mean (per sample) log_likelihood"""
 
     # Divide by the determinant by subtracting its log to get the the log
     # likelihood of the observations.  The `transformations` are lower-triangular, so
@@ -173,16 +189,27 @@ def joint_conditional_log_likelihood(
     return torch.mean(ll)
 
 
-def optimize(optim, closure):
+def optimize(optim: torch.optim.Optimizer, closure: Callable[[], torch.Tensor]):
+    """
+    This is a wrapper around optim.step() that higher level monitoring.
+    Arguments:
+       optim: torch.optim.Optimizer - optimizer to use.
+       closure: a "closure" that evaluates the objective function
+                and the Pytorch optimizer closure() conventions
+                which include 1) zeroing the gradient; 2) evaluating
+                the objective; 3) back-propagating the derivative
+                informaiton; 4) returning the objective value.
+
+    Returns: Nothing
+
+    """
     best_loss = float("inf")
     done = False
     logging.info("Starting optimization")
     while not done:
         optim.step(closure)
         current_loss = closure()
-        logging.info(
-            f"\tcurrent loss: {current_loss:.4f}   previous best loss: {best_loss:.4f}"
-        )
+        logging.info(f"\tCurrent loss: {current_loss:.4f}")
         if float(current_loss) < best_loss:
             best_loss = current_loss
         else:
@@ -191,13 +218,17 @@ def optimize(optim, closure):
 
 
 class UnivariateARCHModel:
-    def __init__(self, distribution=normal_distribution, device=None):
+    def __init__(
+        self,
+        distribution: torch.distributions.Distribution = normal_distribution,
+        device: torch.device = None,
+    ):
         self.a = self.b = self.c = self.d = None
         self.sample_std = None
         self.distribution = distribution
         self.device = device
 
-    def initialize_parameters(self, n):
+    def initialize_parameters(self, n: int):
         self.a = DiagonalParameter(n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = DiagonalParameter(n, INITIAL_DECAY, device=self.device)
         self.c = DiagonalParameter(n, 1.0, device=self.device)
@@ -240,9 +271,9 @@ class UnivariateARCHModel:
         sigma = torch.stack(sigma_sequence)
         return sigma
 
-    def __mean_log_likelihood(self, observations):
+    def __mean_log_likelihood(self, observations: torch.Tensor):
         """
-        This computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        Compute and return the mean (per-sample) log likelihood (the total log likelihood divided by the number of samples).
         """
         sigma = self.__simulate(observations)
         mean_ll = marginal_conditional_log_likelihood(
@@ -250,7 +281,7 @@ class UnivariateARCHModel:
         )
         return mean_ll
 
-    def fit(self, observations):
+    def fit(self, observations: torch.Tensor):
         n = observations.shape[1]
 
         self.initialize_parameters(n)
@@ -296,7 +327,7 @@ class UnivariateARCHModel:
 
         return sigma
 
-    def mean_log_likelihood(self, observations):
+    def mean_log_likelihood(self, observations: torch.Tensor):
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
@@ -311,9 +342,9 @@ class MultivariateARCHModel:
     def __init__(
         self,
         constraint=ParameterConstraint.FULL,
-        univariate_model=None,
-        distribution=normal_distribution,
-        device=None,
+        univariate_model=Union[UnivariateARCHModel, None],
+        distribution: torch.distributions.Distribution = normal_distribution,
+        device: torch.device = None,
     ):
         self.constraint = constraint
         self.univariate_model = univariate_model
@@ -331,7 +362,7 @@ class MultivariateARCHModel:
         else:
             self.parameter_factory = FullParameter
 
-    def initialize_parameters(self, n):
+    def initialize_parameters(self, n: int):
         # Initialize a and b as simple multiples of the identity
         self.a = self.parameter_factory(n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = self.parameter_factory(n, INITIAL_DECAY, device=self.device)
@@ -387,7 +418,9 @@ class MultivariateARCHModel:
         h = torch.stack(h_sequence)
         return h
 
-    def __mean_log_likelihood(self, observations, sigma=None):
+    def __mean_log_likelihood(
+        self, observations: torch.Tensor, sigma: Union[torch.Tensor, None] = None
+    ):
         """
         This computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
         """
@@ -410,7 +443,7 @@ class MultivariateARCHModel:
 
         return mean_ll
 
-    def fit(self, observations):
+    def fit(self, observations: torch.Tensor):
         n = observations.shape[1]
 
         self.initialize_parameters(n)
@@ -475,14 +508,12 @@ class MultivariateARCHModel:
         with torch.no_grad():
             if self.univariate_model is not None:
                 sigma_est = self.univariate_model.simulate(observations)
-                scaled_observations = observations / sigma_est
+                unscaled_h = self.__simulate(observations / sigma_est)
+                h = (sigma_est.unsqueeze(2).expand(unscaled_h.shape)) * unscaled_h
             else:
-                sigma_est = None
-                scaled_observations = observations
+                h = self.__simulate(observations)
 
-            result = self.__simulate(scaled_observations)
-
-        return result, sigma_est
+        return h
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """

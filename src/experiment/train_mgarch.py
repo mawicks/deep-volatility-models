@@ -125,11 +125,8 @@ def run(
     multivariate_model.fit(observations)
 
     # Simulate one more time with optimal parameters.
-    h, sigma_est = multivariate_model.simulate(observations)
+    h = multivariate_model.simulate(observations)
     print("h: ", h.shape)
-    print("sigma_est: ", sigma_est.shape)
-    if sigma_est is not None:
-        h = (sigma_est.unsqueeze(2).expand(h.shape)) * h
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
