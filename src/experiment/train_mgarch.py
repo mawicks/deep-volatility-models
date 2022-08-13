@@ -1,8 +1,7 @@
-b * shelve  # Standard Python
+# Standard Python
 import datetime as dt
 import logging
 
-import os
 from typing import Callable, Dict, Iterable, Iterator, Union, Tuple
 
 # Common packages
@@ -11,16 +10,16 @@ import pandas as pd
 
 import torch
 
+from deep_volatility_models import data_sources
+from deep_volatility_models import stock_data
+from deep_volatility_models import time_series_datasets
+
 # Local imports
 from mgarch_models import (
     UnivariateARCHModel,
     MultivariateARCHModel,
     ParameterConstraint,
 )
-
-from deep_volatility_models import data_sources
-from deep_volatility_models import stock_data
-from deep_volatility_models import time_series_datasets
 
 DEFAULT_SEED = 42
 
@@ -127,17 +126,21 @@ def run(
 
     # Simulate one more time with optimal parameters.
     h, sigma_est = multivariate_model.simulate(observations)
+    print("h: ", h.shape)
+    print("sigma_est: ", sigma_est.shape)
+    if sigma_est is not None:
+        h = (sigma_est.unsqueeze(2).expand(h.shape)) * h
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
-    variance = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
+    sigma = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
 
-    inverse_variance = torch.diag_embed(variance ** (-1), dim1=1, dim2=2)
-    correlation = inverse_variance @ covariance @ inverse_variance
+    inverse_sigma = torch.diag_embed(sigma ** (-1), dim1=1, dim2=2)
+    correlation = inverse_sigma @ covariance @ inverse_sigma
 
     result = {
         "transformation": h.detach().numpy(),
-        "variance": variance.detach().numpy(),
+        "sigma": sigma.detach().numpy(),
         "covariance": covariance.detach().numpy(),
         "correlation": correlation.detach().numpy(),
         "training_data": training_data,
@@ -145,14 +148,12 @@ def run(
 
     torch.save(result, "mgarch_output.pt")
 
-    print("variances:\n", variance)
-    print("correlations:\n", correlation)
-    print("transformations:\n", h)
+    logging.info(f"Transformation estimates:\n{h}")
+    logging.info(f"sigma:\n{sigma}")
+    logging.info(f"correlations:\n{correlation}")
 
     # Compute the final loss
     ll = multivariate_model.mean_log_likelihood(observations)
-
-    logging.info(f"Transformation estimates:\n{h}")
 
     logging.info(f"**** Final likelihood (per sample): {ll:.4f} ****")
 
