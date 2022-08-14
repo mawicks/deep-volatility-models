@@ -2,11 +2,12 @@
 import logging
 
 import os
-from typing import Callable, Dict, Iterable, Iterator, Union, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, Union, Tuple
 
 from enum import Enum
 
 # Common packages
+import numpy as np
 import torch
 
 DEBUG = False
@@ -14,6 +15,7 @@ PROGRESS_ITERATIONS = 20
 
 INITIAL_DECAY = 0.30
 LEARNING_RATE = 0.25
+EPS = 1e-6
 
 MAX_CLAMP = 1e10
 MIN_CLAMP = -MAX_CLAMP
@@ -34,33 +36,57 @@ class ParameterConstraint(Enum):
 
 class ScalarParameter:
     def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
+        self.device = device
         self.value = scale * torch.tensor(1.0, device=device)
         self.value.requires_grad = True
 
+    def set(self, value: float):
+        if not isinstance(value, tensor):
+            value = torch.tensor(
+                value, device=self.device, dtype=torch.float, requires_grad=True
+            )
+        self.value = value
+
     def __matmul__(self, other: torch.Tensor):
-        return self.value * other
+        try:
+            return self.value * other
+        except Exception as e:
+            print(e)
+            print(f"self.value: {self.value}")
+            print(f"other: {other}")
+            raise e
 
 
 class DiagonalParameter:
     def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
+        self.device = device
         self.value = scale * torch.ones(n, device=device)
         self.value.requires_grad = True
 
+    def set(self, value: torch.Tensor):
+        if not isinstance(value, torch.Tensor):
+            value = torch.tensor(
+                value, device=self.device, dtype=torch.float, requires_grad=True
+            )
+
+        if len(value.shape) != 1:
+            raise ValueError(f"value: {value} should have one and only one dimension")
+
+        self.value = value
+
     def __matmul__(self, other: torch.Tensor):
-        return self.value * other
-
-
-class FullParameter:
-    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
-        self.value = scale * torch.eye(n, device=device)
-        self.value.requires_grad = True
-
-    def __matmul__(self, other: torch.Tensor):
-        return self.value @ other
+        try:
+            return self.value * other
+        except Exception as e:
+            print(e)
+            print(f"self.value: {self.value}")
+            print(f"other: {other}")
+            raise e
 
 
 class TriangularParameter:
     def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
+        self.device = device
         self.value = scale * torch.eye(n, device=device)
         self.value.requires_grad = True
 
@@ -69,7 +95,36 @@ class TriangularParameter:
         # torch.tril() may seem unnecessary.  Using the torch.tril()
         # ensures that the upper entries remain excluded from gradient
         # calculations and don't get updated by the optimizer.
-        return torch.tril(self.value) @ other
+        try:
+            return torch.tril(self.value) @ other
+        except Exception as e:
+            print(e)
+            print(f"self.value: {self.value}")
+            print(f"other: {other}")
+            raise e
+
+
+class FullParameter:
+    def __init__(self, n: int, scale: float = 1.0, device: torch.device = None):
+        self.device = device
+        self.value = scale * torch.eye(n, device=device)
+        self.value.requires_grad = True
+
+    def set(self, value: Any):
+        if not isinstance(value, torch.Tensor):
+            value = torch.tensor(
+                value, device=self.device, dtype=torch.float, requires_grad=True
+            )
+        self.value = value
+
+    def __matmul__(self, other: torch.Tensor):
+        try:
+            return self.value @ other
+        except Exception as e:
+            print(e)
+            print(f"self.value: {self.value}")
+            print(f"other: {other}")
+            raise e
 
 
 def make_diagonal_nonnegative(m: torch.Tensor):
@@ -223,32 +278,99 @@ class UnivariateARCHModel:
         distribution: torch.distributions.Distribution = normal_distribution,
         device: torch.device = None,
     ):
-        self.a = self.b = self.c = self.d = None
+        self.n = self.a = self.b = self.c = self.d = None
         self.sample_std = None
         self.distribution = distribution
         self.device = device
 
     def initialize_parameters(self, n: int):
+        self.n = n
         self.a = DiagonalParameter(n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = DiagonalParameter(n, INITIAL_DECAY, device=self.device)
         self.c = DiagonalParameter(n, 1.0, device=self.device)
         self.d = DiagonalParameter(n, 1.0, device=self.device)
 
+    def set_parameters(self, n: int, a: Any, b: Any, c: Any, d: Any, initial_std: Any):
+        self.n = n
+        if not isinstance(a, torch.Tensor):
+            a = torch.tensor(a, dtype=float, device=self.device)
+        if not isinstance(b, torch.Tensor):
+            b = torch.tensor(b, dtype=float, device=self.device)
+        if not isinstance(c, torch.Tensor):
+            c = torch.tensor(c, dtype=float, device=self.device)
+        if not isinstance(d, torch.Tensor):
+            d = torch.tensor(d, dtype=float, device=self.device)
+        if not isinstance(initial_std, torch.Tensor):
+            initial_std = torch.tensor(initial_std, dtype=float, device=self.device)
+
+        if (
+            self.n != a.shape[0]
+            or self.n != b.shape[0]
+            or self.n != c.shape[0]
+            or self.n != d.shape[0]
+            or self.n != initial_std.shape[0]
+        ):
+            raise ValueError(
+                f"The first dimension of a({a.shape}), b({b.shape}), "
+                f"c({c.shape}), d({d.shape}), and "
+                f"initial_std({initial_std.shape}) must equal n:{n}"
+            )
+        if (
+            len(a.shape) != 1
+            or len(b.shape) != 1
+            or len(c.shape) != 1
+            or len(d.shape) != 1
+            or len(initial_std) != 1
+        ):
+            raise ValueError(
+                f"a({a.shape}), b({b.shape}), "
+                f"c({c.shape}), d({d.shape}), and "
+                f"initial_std({initial_std.shape}) must all have one dimension"
+            )
+
+        self.a = DiagonalParameter(n)
+        self.b = DiagonalParameter(n)
+        self.c = DiagonalParameter(n)
+        self.d = DiagonalParameter(n)
+
+        self.a.set(a)
+        self.b.set(b)
+        self.c.set(c)
+        self.d.set(d)
+
+        self.sample_std = initial_std
+
     def __predict(
         self,
         observations: torch.Tensor,
+        sample=False,
+        initial_sigma=None,
     ):
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
         Argument:
-            observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+            observations: torch.Tensor of dimension (n_obs, n_symbols)
+                          of observations
+            sample: bool - Run the model in 'sampling' mode, in which
+                           case `observations` unit variance noise
+                           rather than actual observations.
+            initial_sigma: torch.Tensor - Initial standard deviation vector
         Returns:
             sigma: torch.Tensor of predictions for each observation
             sigma_next: torch.Tensor prediction for next unobserved value
 
         """
-        sigma_t = self.d @ self.sample_std
+        if initial_sigma:
+            if not isinstance(initial_sigma, torch.Tensor):
+                initial_sigma = torch.tensor(
+                    initial_sigma, dtype=float, device=self.device
+                )
+            sigma_t = initial_sigma
+        else:
+            sigma_t = self.d @ self.sample_std
+
+        sigma_t = torch.maximum(sigma_t, torch.tensor(float(EPS)))
         sigma_sequence = []
 
         for k, o in enumerate(observations):
@@ -259,6 +381,11 @@ class UnivariateARCHModel:
             # While searching over the parameter space, an unstable value for `a` may be tested.
             # Clamp to prevent it from overflowing.
             a_sigma = torch.clamp(self.a @ sigma_t, min=MIN_CLAMP, max=MAX_CLAMP)
+
+            if sample:
+                # o is noise that must be scaled
+                o = sigma_t * o
+
             b_o = self.b @ o
             c_sample_std = self.c @ self.sample_std
 
@@ -285,9 +412,8 @@ class UnivariateARCHModel:
         return mean_ll
 
     def fit(self, observations: torch.Tensor):
-        n = observations.shape[1]
+        self.initialize_parameters(observations.shape[1])
 
-        self.initialize_parameters(n)
         logging.debug(f"a:\n{self.a.value}")
         logging.debug(f"b:\n{self.b.value}")
         logging.debug(f"c:\n{self.c.value}")
@@ -304,6 +430,12 @@ class UnivariateARCHModel:
         )
 
         def loss_closure():
+            if DEBUG:
+                print(f"a: {self.a.value}")
+                print(f"b: {self.b.value}")
+                print(f"c: {self.c.value}")
+                print(f"d: {self.d.value}")
+                print()
             optim.zero_grad()
             loss = -self.__mean_log_likelihood(observations)
             loss.backward()
@@ -330,6 +462,28 @@ class UnivariateARCHModel:
 
         return sigma, sigma_next
 
+    def sample(
+        self, n: Union[torch.Tensor, int], initial_sigma: Union[torch.Tensor, None]
+    ):
+        """
+        Generate a random sampled output from the model.
+        Arguments:
+            n: torch.Tensor - Noise to use as input or
+               int - Number of points to generate, in which case GWN is used.
+        Returns:
+            output: torch.Tensor - Sample model output
+            sigma: torch.Tensor - Sigma value used to scale the sample
+        """
+        with torch.no_grad():
+            if isinstance(n, int):
+                n = torch.randn(n, self.n)
+
+            sigma, sigma_next = self.__predict(
+                n, sample=True, initial_sigma=initial_sigma
+            )
+            output = sigma * n
+        return output, sigma
+
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
@@ -354,7 +508,7 @@ class MultivariateARCHModel:
         self.distribution = distribution
         self.device = device
 
-        self.a = self.b = self.c = self.d = None
+        self.n = self.a = self.b = self.c = self.d = None
 
         if constraint == ParameterConstraint.SCALAR:
             self.parameter_factory = ScalarParameter
@@ -366,11 +520,22 @@ class MultivariateARCHModel:
             self.parameter_factory = FullParameter
 
     def initialize_parameters(self, n: int):
+        self.n = n
         # Initialize a and b as simple multiples of the identity
         self.a = self.parameter_factory(n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = self.parameter_factory(n, INITIAL_DECAY, device=self.device)
         self.c = self.parameter_factory(n, 0.01, device=self.device)
         self.d = self.parameter_factory(n, 1.0, device=self.device)
+
+    def set_parameters(self, n: int, a: Any, b: Any, c: Any, d: Any, initial_h: Any):
+        self.n = n
+        self.a = FullParameter(n).set(a)
+        self.b = Fullparameter(n).set(b)
+        self.c = FullParameter(n).set(c)
+        self.d = FullParameter(n).set(d)
+        if not isinstance(initial_h, torch.Tensor):
+            initial_h = torch.tensor(initial_h, device=self.device, dtype=float)
+        self.h_bar = initial_h
 
     def __predict(
         self,
@@ -385,7 +550,14 @@ class MultivariateARCHModel:
             h: torch.Tensor of predictions for each observation
             h_next: torch.Tensor prediction for next unobserved value
         """
-        ht = self.d @ self.h_bar
+        # We required all of the ht_t to be lower traingular (even for then
+        # full parameterization  Ensure this using QR.
+        ht_t = torch.linalg.qr((self.d @ self.h_bar).T, mode="reduced")[1]
+        ht = ht_t.T
+        if DEBUG:
+            print(f"Initial ht: {ht}")
+            print(f"self.d: {self.d.value}")
+            print(f"self.h_bar: {self.h_bar}")
         h_sequence = []
 
         for k, o in enumerate(observations):
@@ -451,8 +623,8 @@ class MultivariateARCHModel:
 
     def fit(self, observations: torch.Tensor):
         n = observations.shape[1]
-
         self.initialize_parameters(n)
+
         logging.debug(f"a:\n{self.a.value}")
         logging.debug(f"b:\n{self.b.value}")
         logging.debug(f"c:\n{self.c.value}")
@@ -481,6 +653,12 @@ class MultivariateARCHModel:
         )
 
         def loss_closure():
+            if DEBUG:
+                print(f"a: {self.a.value}")
+                print(f"b: {self.b.value}")
+                print(f"c: {self.c.value}")
+                print(f"d: {self.d.value}")
+                print()
             optim.zero_grad()
 
             # Do not use scaled observations here.
@@ -550,48 +728,9 @@ class MultivariateARCHModel:
 
 if __name__ == "__main__":
     # Example usage:
-
-    # Build a univariate, standard GARCH model:
     univariate_model = UnivariateARCHModel()
-    observations = torch.tensor(
-        [
-            [0.01, 0.01],
-            [-0.01, 0.0],
-            [0.02, 0.01],
-            [-0.02, -0.008],
-            [0.0, -0.04],
-            [0.03, -0.03],
-            [-0.04, -0.02],
-            [-0.01, -0.02],
-            [0.01, -0.001],
-            [0.02, -0.01],
-            [0.00, -0.02],
-            [0.004, 0.003],
-            [0.001, 0.002],
-            [-0.001, 0.001],
-            [0.001, 0.002],
-        ]
-    )
-    univariate_model.fit(observations)
-    sigma_past, sigma_next = univariate_model.predict(observations)
-    univariate_mean_log_likelihood = univariate_model.mean_log_likelihood(observations)
 
-    # Build a multivariate model:
-    multivariate_model = MultivariateARCHModel(
-        # constraint=ParameterConstraint.TRIANGULAR
+    univariate_model.set_parameters(
+        1, a=[0.90], b=[0.33], c=[0.25], d=[1.0], initial_std=[0.01]
     )
-    multivariate_model.fit(observations)
-    h_past, h_next = multivariate_model.predict(observations)
-    multivariate_mean_log_likelihood = multivariate_model.mean_log_likelihood(
-        observations
-    )
-
-    # Build a multivariate model, with an internal univariate model to estimate
-    # marginal variance before estimating correlation
-    two_step_model = MultivariateARCHModel(
-        univariate_model=UnivariateARCHModel(),
-        # constraint=ParameterConstraint.TRIANGULAR,
-    )
-
-    two_step_model.fit(observations)
-    two_step_mean_log_likelihood = two_step_model.mean_log_likelihood(observations)
+    x, sigma = univariate_model.sample(10000, [0.01])
