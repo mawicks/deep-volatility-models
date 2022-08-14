@@ -234,7 +234,7 @@ class UnivariateARCHModel:
         self.c = DiagonalParameter(n, 1.0, device=self.device)
         self.d = DiagonalParameter(n, 1.0, device=self.device)
 
-    def __simulate(
+    def __predict(
         self,
         observations: torch.Tensor,
     ):
@@ -243,6 +243,9 @@ class UnivariateARCHModel:
 
         Argument:
             observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        Returns:
+            sigma: torch.Tensor of predictions for each observation
+            sigma_next: torch.Tensor prediction for next unobserved value
 
         """
         sigma_t = self.d @ self.sample_std
@@ -269,13 +272,13 @@ class UnivariateARCHModel:
             sigma_t = torch.linalg.vector_norm(m, dim=0)
 
         sigma = torch.stack(sigma_sequence)
-        return sigma
+        return sigma, sigma_t
 
     def __mean_log_likelihood(self, observations: torch.Tensor):
         """
         Compute and return the mean (per-sample) log likelihood (the total log likelihood divided by the number of samples).
         """
-        sigma = self.__simulate(observations)
+        sigma = self.__predict(observations)[0]
         mean_ll = marginal_conditional_log_likelihood(
             observations, sigma, self.distribution
         )
@@ -314,18 +317,18 @@ class UnivariateARCHModel:
             f"d: {self.d.value.detach().numpy()}"
         )
 
-    def simulate(
+    def predict(
         self,
         observations: torch.Tensor,
     ):
         """
-        This is the inference version of simulate(), which is the version clients would normally use.
+        This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
         with torch.no_grad():
-            sigma = self.__simulate(observations)
+            sigma, sigma_next = self.__predict(observations)
 
-        return sigma
+        return sigma, sigma_next
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
@@ -333,16 +336,16 @@ class UnivariateARCHModel:
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
         """
         with torch.no_grad():
-            result = self.__mean_log_likelihood(observations, self.sample_std)
+            result = self.__mean_log_likelihood(observations)
 
-        return result
+        return float(result)
 
 
 class MultivariateARCHModel:
     def __init__(
         self,
         constraint=ParameterConstraint.FULL,
-        univariate_model=Union[UnivariateARCHModel, None],
+        univariate_model: Union[UnivariateARCHModel, None] = None,
         distribution: torch.distributions.Distribution = normal_distribution,
         device: torch.device = None,
     ):
@@ -369,7 +372,7 @@ class MultivariateARCHModel:
         self.c = self.parameter_factory(n, 0.01, device=self.device)
         self.d = self.parameter_factory(n, 1.0, device=self.device)
 
-    def __simulate(
+    def __predict(
         self,
         observations: torch.Tensor,
     ):
@@ -378,6 +381,9 @@ class MultivariateARCHModel:
 
         Argument:
             observations: torch.Tensor of dimension (n_obs, n_symbols) of observations
+        Returns:
+            h: torch.Tensor of predictions for each observation
+            h_next: torch.Tensor prediction for next unobserved value
         """
         ht = self.d @ self.h_bar
         h_sequence = []
@@ -416,7 +422,7 @@ class MultivariateARCHModel:
             ht = make_diagonal_nonnegative(ht_t.T)
 
         h = torch.stack(h_sequence)
-        return h
+        return h, ht
 
     def __mean_log_likelihood(
         self, observations: torch.Tensor, sigma: Union[torch.Tensor, None] = None
@@ -434,7 +440,7 @@ class MultivariateARCHModel:
         else:
             scaled_observations = observations
 
-        h = self.__simulate(scaled_observations)
+        h = self.__predict(scaled_observations)[0]
 
         # It's important to use non-scaled observations in likelihood function
         mean_ll = joint_conditional_log_likelihood(
@@ -460,7 +466,7 @@ class MultivariateARCHModel:
         if self.univariate_model:
             self.h_bar = torch.nn.functional.normalize(self.h_bar, dim=1)
             self.univariate_model.fit(observations)
-            sigma_est = self.univariate_model.simulate(observations)
+            sigma_est = self.univariate_model.predict(observations)[0]
         else:
             self.univariate_model = None
             sigma_est = None
@@ -497,23 +503,27 @@ class MultivariateARCHModel:
         logging.debug(f"c.grad:\n{self.c.value.grad}")
         logging.debug(f"d.grad:\n{self.d.value.grad}")
 
-    def simulate(
+    def predict(
         self,
         observations: torch.Tensor,
     ):
         """
-        This is the inference version of simulate(), which is the version clients would normally use.
+        This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
         with torch.no_grad():
             if self.univariate_model is not None:
-                sigma_est = self.univariate_model.simulate(observations)
-                unscaled_h = self.__simulate(observations / sigma_est)
-                h = (sigma_est.unsqueeze(2).expand(unscaled_h.shape)) * unscaled_h
+                sigma, sigma_next = self.univariate_model.predict(observations)
+                unscaled_h, unscaled_h_next = self.__predict(observations / sigma)
+                h = sigma.unsqueeze(2).expand(unscaled_h.shape) * unscaled_h
+                h_n = (
+                    sigma_next.unsqueeze(1).expand(unscaled_h_next.shape)
+                    * unscaled_h_next
+                )
             else:
-                h = self.__simulate(observations)
+                h, h_n = self.__predict(observations)
 
-        return h
+        return h, h_n
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
@@ -529,7 +539,7 @@ class MultivariateARCHModel:
         """
         with torch.no_grad():
             if self.univariate_model:
-                sigma = self.univariate_model.simulate(observations)
+                sigma = self.univariate_model.predict(observations)[0]
             else:
                 sigma = None
 
@@ -539,5 +549,49 @@ class MultivariateARCHModel:
 
 
 if __name__ == "__main__":
-    # TODO
-    pass
+    # Example usage:
+
+    # Build a univariate, standard GARCH model:
+    univariate_model = UnivariateARCHModel()
+    observations = torch.tensor(
+        [
+            [0.01, 0.01],
+            [-0.01, 0.0],
+            [0.02, 0.01],
+            [-0.02, -0.008],
+            [0.0, -0.04],
+            [0.03, -0.03],
+            [-0.04, -0.02],
+            [-0.01, -0.02],
+            [0.01, -0.001],
+            [0.02, -0.01],
+            [0.00, -0.02],
+            [0.004, 0.003],
+            [0.001, 0.002],
+            [-0.001, 0.001],
+            [0.001, 0.002],
+        ]
+    )
+    univariate_model.fit(observations)
+    sigma_past, sigma_next = univariate_model.predict(observations)
+    univariate_mean_log_likelihood = univariate_model.mean_log_likelihood(observations)
+
+    # Build a multivariate model:
+    multivariate_model = MultivariateARCHModel(
+        # constraint=ParameterConstraint.TRIANGULAR
+    )
+    multivariate_model.fit(observations)
+    h_past, h_next = multivariate_model.predict(observations)
+    multivariate_mean_log_likelihood = multivariate_model.mean_log_likelihood(
+        observations
+    )
+
+    # Build a multivariate model, with an internal univariate model to estimate
+    # marginal variance before estimating correlation
+    two_step_model = MultivariateARCHModel(
+        univariate_model=UnivariateARCHModel(),
+        # constraint=ParameterConstraint.TRIANGULAR,
+    )
+
+    two_step_model.fit(observations)
+    two_step_mean_log_likelihood = two_step_model.mean_log_likelihood(observations)

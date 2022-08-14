@@ -124,22 +124,33 @@ def run(
     )
     multivariate_model.fit(observations)
 
-    # Simulate one more time with optimal parameters.
-    h = multivariate_model.simulate(observations)
+    # Predict one more time with optimal parameters.
+    h, h_next = multivariate_model.predict(observations)
     print("h: ", h.shape)
 
     # Compute some useful quantities to display and to record
     covariance = h @ torch.transpose(h, 1, 2)
+    predicted_covariance = h_next @ h_next.T
+
     sigma = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
+    predicted_sigma = torch.sqrt(torch.diag(predicted_covariance))
 
     inverse_sigma = torch.diag_embed(sigma ** (-1), dim1=1, dim2=2)
+    inverse_predicted_sigma = torch.diag(predicted_sigma ** (-1))
     correlation = inverse_sigma @ covariance @ inverse_sigma
+    predicted_correlation = (
+        inverse_predicted_sigma @ predicted_covariance @ inverse_predicted_sigma
+    )
 
     result = {
-        "transformation": h.detach().numpy(),
-        "sigma": sigma.detach().numpy(),
-        "covariance": covariance.detach().numpy(),
-        "correlation": correlation.detach().numpy(),
+        "transformation": h.numpy(),
+        "predicted_transformation": h_next.numpy(),
+        "sigma": sigma.numpy(),
+        "predicted_sigma": predicted_sigma.numpy(),
+        "covariance": covariance.numpy(),
+        "predicted_covariance": predicted_covariance.numpy(),
+        "correlation": correlation.numpy(),
+        "predicted_correlation": predicted_correlation.numpy(),
         "training_data": training_data,
     }
 
