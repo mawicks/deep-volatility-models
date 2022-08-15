@@ -789,9 +789,11 @@ class MultivariateARCHModel:
             output = (h @ n.unsqueeze(2)).squeeze(2)
 
             if self.univariate_model:
-                output = univariate_model.sample(output, initial_sigma)
+                output, sigma = univariate_model.sample(output, initial_sigma)
+            else:
+                sigma = None
 
-        return output, h
+        return output, h, sigma
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
@@ -817,15 +819,24 @@ class MultivariateARCHModel:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s:%(message)s",
+        force=True,
+    )
     # Example usage:
     univariate_model = UnivariateARCHModel()
 
     univariate_model.set_parameters(
         a=[0.90], b=[0.33], c=[0.25], d=[1.0], initial_std=[0.01]
     )
-    x, sigma = univariate_model.sample(10000, [0.01])
+    uv_x, uv_sigma = univariate_model.sample(10000, [0.01])
+    univariate_model.fit(uv_x)
 
-    multivariate_model = MultivariateARCHModel()
+    # Here's a multivariate case
+    multivariate_model = MultivariateARCHModel(
+        constraint=ParameterConstraint.TRIANGULAR
+    )
     multivariate_model.set_parameters(
         a=[[0.92, 0.0, 0.0], [-0.03, 0.95, 0.0], [-0.04, -0.02, 0.97]],
         b=[[0.4, 0.0, 0.0], [0.1, 0.3, 0.0], [0.13, 0.08, 0.2]],
@@ -834,6 +845,6 @@ if __name__ == "__main__":
         initial_h=[[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]],
     )
 
-    multivariate_model.sample(
-        10, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]
+    mv_x, mv_h, mv_sigma = multivariate_model.sample(
+        50000, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]
     )
