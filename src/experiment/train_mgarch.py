@@ -125,7 +125,7 @@ def run(
     multivariate_model.fit(observations)
 
     # Predict one more time with optimal parameters.
-    h, h_next = multivariate_model.predict(observations)
+    h, h_next, sigma, sigma_next = multivariate_model.predict(observations)
     print("h: ", h.shape)
 
     # Compute some useful quantities to display and to record
