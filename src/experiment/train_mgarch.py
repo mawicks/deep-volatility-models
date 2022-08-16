@@ -16,6 +16,8 @@ from deep_volatility_models import time_series_datasets
 
 # Local imports
 from mgarch_models import (
+    ZeroMeanModel,
+    ARMAMeanModel,
     UnivariateARCHModel,
     MultivariateARCHModel,
     ParameterConstraint,
@@ -72,6 +74,7 @@ def run(
     eval_start_date=None,
     eval_end_date=None,
     use_univariate=False,
+    use_mean=False,
     constraint=ParameterConstraint.FULL,
 ):
     # Rewrite symbols with deduped, uppercase versions
@@ -86,6 +89,7 @@ def run(
     logging.info(f"Evaluation/termination start date: {eval_start_date}")
     logging.info(f"Evaluation/termination end date: {eval_end_date}")
     logging.info(f"Use univariate: {use_univariate}")
+    logging.info(f"Use mean: {use_mean}")
 
     data_store = stock_data.FileSystemStore("training_data")
     if use_hsmd:
@@ -112,8 +116,13 @@ def run(
     observations = torch.tensor(training_data.values, dtype=torch.float, device=device)
     logging.info(f"observations:\n {observations}")
 
+    if use_mean:
+        mean_model = ARMAMeanModel()
+    else:
+        mean_model = ZeroMeanModel()
+
     if use_univariate:
-        univariate_model = UnivariateARCHModel(device=device)
+        univariate_model = UnivariateARCHModel(mean_model=mean_model, device=device)
     else:
         univariate_model = None
 
@@ -216,6 +225,13 @@ def run(
     help="Use a univariate 'garchs' as a prescalar",
 )
 @click.option(
+    "--use-mean",
+    is_flag=True,
+    default=None,
+    show_default=True,
+    help="Use an ARMA mean model rather than just zero.",
+)
+@click.option(
     "--constraint",
     "-c",
     type=click.Choice(
@@ -234,6 +250,7 @@ def main_cli(
     eval_start_date,
     eval_end_date,
     use_univariate,
+    use_mean,
     constraint,
 ):
 
@@ -263,6 +280,7 @@ def main_cli(
         eval_start_date=eval_start_date,
         eval_end_date=eval_end_date,
         use_univariate=use_univariate,
+        use_mean=use_mean,
         constraint=constraints[constraint],
     )
 
