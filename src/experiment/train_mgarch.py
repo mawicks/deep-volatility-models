@@ -117,9 +117,9 @@ def run(
     logging.info(f"observations:\n {observations}")
 
     if use_mean:
-        mean_model = ARMAMeanModel()
+        mean_model = ARMAMeanModel(device=device)
     else:
-        mean_model = ZeroMeanModel()
+        mean_model = ZeroMeanModel(device=device)
 
     if use_univariate:
         univariate_model = UnivariateARCHModel(mean_model=mean_model, device=device)
