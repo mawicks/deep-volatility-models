@@ -168,13 +168,13 @@ def random_lower_triangular(
 
 def marginal_conditional_log_likelihood(
     observations: torch.Tensor,
-    sigma: torch.Tensor,
+    scale: torch.Tensor,
     distribution: torch.distributions.Distribution,
 ):
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
-       sigma: torch.Tensor of shape (n_obs, n_symbols)
+       scale: torch.Tensor of shape (n_obs, n_symbols)
            Contains the estimated univariate (marginal) standard deviation for each observation.
        distribution: torch.distributions.distribution.Distribution instance which should have a log_prob() method.
            Note we assume distrubution was constructed with center=0 and shape=1.  Any normalizing and recentering
@@ -182,13 +182,11 @@ def marginal_conditional_log_likelihood(
 
     Returns the mean log_likelihood"""
 
-    if sigma is not None:
-        e = observations / sigma
-
-    logging.debug(f"e: \n{e}")
+    scaled_observations = observations / scale
+    logging.debug(f"scaled_observations: \n{scaled_observations}")
 
     # Compute the log likelihoods on the innovations
-    ll = distribution.log_prob(e) - torch.log(sigma)
+    ll = distribution.log_prob(scaled_observations) - torch.log(scale)
 
     # For consistency with the multivariate case, we *sum* over the
     # variables (columns) first and *average* over the rows (observations).
