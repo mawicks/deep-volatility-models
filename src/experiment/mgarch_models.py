@@ -940,7 +940,7 @@ class MultivariateARCHModel:
     def __init__(
         self,
         constraint=ParameterConstraint.FULL,
-        univariate_model: Union[UnivariateARCHModel, None] = None,
+        univariate_model: UnivariateScalingModel = UnivariateUnitScalingModel(),
         distribution: torch.distributions.Distribution = normal_distribution,
         device: torch.device = None,
     ):
@@ -948,6 +948,9 @@ class MultivariateARCHModel:
         self.univariate_model = univariate_model
         self.distribution = distribution
         self.device = device
+
+        # There should be a better way to do this.  Maybe add a set_device method.
+        self.univariate_model.device = device
 
         self.n = self.a = self.b = self.c = self.d = None
 
@@ -967,6 +970,7 @@ class MultivariateARCHModel:
         self.b = self.parameter_factory(n, INITIAL_DECAY, device=self.device)
         self.c = self.parameter_factory(n, 0.01, device=self.device)
         self.d = self.parameter_factory(n, 1.0, device=self.device)
+        self.log_parameters()
 
     def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_h: Any):
         if not isinstance(a, torch.Tensor):
@@ -1121,28 +1125,23 @@ class MultivariateARCHModel:
         return mean_ll
 
     def fit(self, observations: torch.Tensor):
+        self.univariate_model.fit(observations)
+        sigma_est, mu = self.univariate_model.predict(observations)[:2]
+        mean_sigma_est = torch.mean(sigma_est, dim=0)
+
         n = observations.shape[1]
         self.initialize_parameters(n)
 
-        logging.debug(f"a:\n{self.a.value}")
-        logging.debug(f"b:\n{self.b.value}")
-        logging.debug(f"c:\n{self.c.value}")
-        logging.debug(f"d:\n{self.d.value}")
+        centered_observations = observations - mu
 
         self.sample_mean_scale = (
-            torch.linalg.qr(observations, mode="reduced")[1]
-        ).T / torch.sqrt(torch.tensor(observations.shape[0]))
+            torch.linalg.qr(centered_observations, mode="reduced")[1]
+        ).T / torch.sqrt(torch.tensor(centered_observations.shape[0]))
         self.sample_mean_scale = make_diagonal_nonnegative(self.sample_mean_scale)
 
-        if self.univariate_model:
-            self.univariate_model.fit(observations)
-            sigma_est = self.univariate_model.predict(observations)[0]
-            mean_sigma_est = torch.mean(sigma_est, dim=0)
-            self.sample_mean_scale = (
-                torch.diag(mean_sigma_est**-1) @ self.sample_mean_scale
-            )
-        else:
-            sigma_est = None
+        self.sample_mean_scale = (
+            torch.diag(mean_sigma_est**-1) @ self.sample_mean_scale
+        )
 
         logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
 
@@ -1162,8 +1161,10 @@ class MultivariateARCHModel:
                 print()
             optim.zero_grad()
 
-            # Do not use scaled observations here.
-            loss = -self.__mean_log_likelihood(observations, uv_scale=sigma_est)
+            # Do not use scaled observations here; centering is okay.
+            loss = -self.__mean_log_likelihood(
+                centered_observations, uv_scale=sigma_est
+            )
             loss.backward()
 
             return loss
@@ -1187,27 +1188,23 @@ class MultivariateARCHModel:
         It doesn't compute any gradient information, so it should be faster.
         """
         with torch.no_grad():
-            if self.univariate_model is not None:
-                (
-                    uv_scale,
-                    uv_mean,
-                    uv_scale_next,
-                    uv_mean_next,
-                ) = self.univariate_model.predict(observations)
-                normalized_mv_scale, normalized_mv_scale_next = self._predict(
-                    observations / uv_scale
-                )
-                mv_scale = (
-                    uv_scale.unsqueeze(2).expand(normalized_mv_scale.shape)
-                    * normalized_mv_scale
-                )
-                mv_scale_next = (
-                    uv_scale_next.unsqueeze(1).expand(normalized_mv_scale_next.shape)
-                    * normalized_mv_scale_next
-                )
-            else:
-                mv_scale, mv_scale_next = self._predict(observations)
-                uv_scale = uv_scale_next = None
+            (
+                uv_scale,
+                uv_mean,
+                uv_scale_next,
+                uv_mean_next,
+            ) = self.univariate_model.predict(observations)
+            normalized_mv_scale, normalized_mv_scale_next = self._predict(
+                observations / uv_scale
+            )
+            mv_scale = (
+                uv_scale.unsqueeze(2).expand(normalized_mv_scale.shape)
+                * normalized_mv_scale
+            )
+            mv_scale_next = (
+                uv_scale_next.unsqueeze(1).expand(normalized_mv_scale_next.shape)
+                * normalized_mv_scale_next
+            )
 
         return mv_scale, mv_scale_next, uv_scale, uv_scale_next
 
@@ -1231,15 +1228,7 @@ class MultivariateARCHModel:
             output: torch.Tensor - Sample model output
             h: torch.Tensor - Sqrt of covariance used to scale the sample
         """
-        if initial_uv_scale is not None and self.univariate_model is None:
-            raise ValueError(
-                "Can't specific initial_uv_scale without an internal univariate model"
-            )
-        if (
-            initial_uv_scale is None
-            and self.univariate_model is not None
-            and initial_mv_scale is not None
-        ):
+        if initial_uv_scale is None and initial_mv_scale is not None:
             logging.warning(
                 "You provided an initial_h but didn't provide an initial_sigma. This probably isn't what you want."
             )
@@ -1253,11 +1242,7 @@ class MultivariateARCHModel:
             )
 
             output = (mv_scale @ n.unsqueeze(2)).squeeze(2)
-
-            if self.univariate_model:
-                output, uv_scale = univariate_model.sample(output, initial_uv_scale)
-            else:
-                uv_scale = None
+            output, uv_scale = univariate_model.sample(output, initial_uv_scale)
 
         return output, mv_scale, uv_scale
 
@@ -1274,11 +1259,8 @@ class MultivariateARCHModel:
 
         """
         with torch.no_grad():
-            if self.univariate_model:
-                uv_scale = self.univariate_model.predict(observations)[0]
-                print(uv_scale)
-            else:
-                uv_scale = None
+            uv_scale = self.univariate_model.predict(observations)[0]
+            print(uv_scale)
 
             result = self.__mean_log_likelihood(observations, uv_scale)
 
