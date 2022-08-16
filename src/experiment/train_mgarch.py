@@ -18,6 +18,7 @@ from deep_volatility_models import time_series_datasets
 from mgarch_models import (
     ZeroMeanModel,
     ARMAMeanModel,
+    UnivariateUnitScalingModel,
     UnivariateARCHModel,
     MultivariateARCHModel,
     ParameterConstraint,
@@ -124,7 +125,9 @@ def run(
     if use_univariate:
         univariate_model = UnivariateARCHModel(mean_model=mean_model, device=device)
     else:
-        univariate_model = None
+        univariate_model = UnivariateUnitScalingModel(
+            mean_model=mean_model, device=device
+        )
 
     multivariate_model = MultivariateARCHModel(
         univariate_model=univariate_model,

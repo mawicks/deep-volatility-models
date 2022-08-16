@@ -607,7 +607,6 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         # Set all of the scaling to ones.
         scale = torch.ones(observations.shape)
         scale_next = torch.ones(observations.shape[1])
-
         return scale, mu, scale_next, mu_next
 
     def __mean_log_likelihood(self, observations: torch.Tensor):
@@ -1136,13 +1135,13 @@ class MultivariateARCHModel:
         self.sample_mean_scale = make_diagonal_nonnegative(self.sample_mean_scale)
 
         if self.univariate_model:
-            self.sample_mean_scale = torch.nn.functional.normalize(
-                self.sample_mean_scale, dim=1
-            )
             self.univariate_model.fit(observations)
             sigma_est = self.univariate_model.predict(observations)[0]
+            mean_sigma_est = torch.mean(sigma_est, dim=0)
+            self.sample_mean_scale = (
+                torch.diag(mean_sigma_est**-1) @ self.sample_mean_scale
+            )
         else:
-            self.univariate_model = None
             sigma_est = None
 
         logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
@@ -1277,6 +1276,7 @@ class MultivariateARCHModel:
         with torch.no_grad():
             if self.univariate_model:
                 uv_scale = self.univariate_model.predict(observations)[0]
+                print(uv_scale)
             else:
                 uv_scale = None
 
