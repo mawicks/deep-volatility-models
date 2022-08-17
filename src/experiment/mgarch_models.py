@@ -679,7 +679,7 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
 
             scale, mu = self._predict(n, sample=True, initial_scale=initial_sigma)[:2]
             output = scale * n + mu
-        return output, sigma, mu
+        return output, scale, mu
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
@@ -903,7 +903,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         with torch.no_grad():
             if isinstance(n, int):
                 n = torch.randn(n, self.n)
-
+            print(self)
             sigma, mu = self._predict(n, sample=True, initial_scale=initial_sigma)[:2]
             output = sigma * n + mu
         return output, sigma
@@ -968,7 +968,7 @@ class MultivariateARCHModel:
         self.d = self.parameter_factory(n, 1.0, device=self.device)
         self.log_parameters()
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_h: Any):
+    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_scale: Any):
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -977,19 +977,21 @@ class MultivariateARCHModel:
             c = torch.tensor(c, dtype=torch.float, device=self.device)
         if not isinstance(d, torch.Tensor):
             d = torch.tensor(d, dtype=torch.float, device=self.device)
-        if not isinstance(initial_h, torch.Tensor):
-            initial_h = torch.tensor(initial_h, dtype=torch.float, device=self.device)
+        if not isinstance(initial_scale, torch.Tensor):
+            initial_scale = torch.tensor(
+                initial_scale, dtype=torch.float, device=self.device
+            )
         if (
             len(a.shape) != 2
             or a.shape != b.shape
             or a.shape != c.shape
             or a.shape != d.shape
-            or a.shape != initial_h.shape
+            or a.shape != initial_scale.shape
         ):
             raise ValueError(
                 f"There must be two dimensions of a({a.shape}), b({b.shape}), "
                 f"c({c.shape}), d({d.shape}), and "
-                f"initial_h({initial_h.shape}) that all agree"
+                f"initial_scale({initial_scale.shape}) that all agree"
             )
 
         self.n = a.shape[0]
@@ -1003,9 +1005,11 @@ class MultivariateARCHModel:
         self.c.set(c)
         self.d.set(d)
 
-        if not isinstance(initial_h, torch.Tensor):
-            initial_h = torch.tensor(initial_h, device=self.device, dtype=torch.float)
-        self.sample_mean_scale = initial_h
+        if not isinstance(initial_scale, torch.Tensor):
+            initial_scale = torch.tensor(
+                initial_scale, device=self.device, dtype=torch.float
+            )
+        self.sample_mean_scale = initial_scale
 
     def _predict(
         self,
@@ -1225,10 +1229,6 @@ class MultivariateARCHModel:
             output: torch.Tensor - Sample model output
             h: torch.Tensor - Sqrt of covariance used to scale the sample
         """
-        if initial_uv_scale is None and initial_mv_scale is not None:
-            logging.warning(
-                "You provided an initial_h but didn't provide an initial_sigma. This probably isn't what you want."
-            )
 
         with torch.no_grad():
             if isinstance(n, int):
@@ -1239,7 +1239,10 @@ class MultivariateARCHModel:
             )[:2]
 
             output = (mv_scale @ n.unsqueeze(2)).squeeze(2)
-            output, uv_scale, mu = univariate_model.sample(output, initial_uv_scale)
+
+            output, uv_scale, mu = self.univariate_model.sample(
+                output, initial_uv_scale
+            )
 
         return output, mv_scale, uv_scale, mu
 
@@ -1267,9 +1270,9 @@ class MultivariateARCHModel:
         if self.a and self.b and self.c and self.d:
             logging.info(
                 "Multivariate ARCH model\n"
-                f"a: {self.a.value.detach().numpy()}, "
-                f"b: {self.b.value.detach().numpy()}, "
-                f"c: {self.c.value.detach().numpy()}, "
+                f"a: {self.a.value.detach().numpy()},\n"
+                f"b: {self.b.value.detach().numpy()},\n"
+                f"c: {self.c.value.detach().numpy()},\n"
                 f"d: {self.d.value.detach().numpy()}"
             )
         else:
@@ -1300,9 +1303,10 @@ if __name__ == "__main__":
         b=[[0.4, 0.0, 0.0], [0.1, 0.3, 0.0], [0.13, 0.08, 0.2]],
         c=[[0.07, 0.0, 0.0], [0.04, 0.1, 0.0], [0.05, 0.005, 0.08]],
         d=[[1.0, 0.0, 0.0], [0.1, 0.6, 0.0], [-1.2, -0.8, 2]],
-        initial_h=[[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]],
+        initial_scale=[[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]],
     )
 
-    mv_x, mv_h, mv_sigma = multivariate_model.sample(
+    mv_x, mv_scale, uv_scale, mu = multivariate_model.sample(
         50000, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]
     )
+    multivariate_model.fit(mv_x)
