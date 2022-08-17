@@ -289,7 +289,19 @@ def optimize(
 
 class MeanModel(Protocol):
     @abstractmethod
+    def initialize_parameters(self, observations: torch.Tensor):
+        raise NotImplementedError
+
+    @abstractmethod
     def set_parameters():
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def log_parameters(self):
         raise NotImplementedError
 
     @abstractmethod
@@ -340,18 +352,6 @@ class MeanModel(Protocol):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def get_parameters(self):
-        raise NotImplementedError
-
-    @abstractmethod
-    def initialize_parameters(self, observations: torch.Tensor):
-        raise NotImplementedError
-
-    @abstractmethod
-    def log_parameters(self):
-        raise NotImplementedError
-
 
 class ZeroMeanModel(MeanModel):
     def __init__(
@@ -360,7 +360,16 @@ class ZeroMeanModel(MeanModel):
     ):
         self.device = device
 
+    def initialize_parameters(self, observations: torch.Tensor):
+        self.n = observations.shape[1]
+
     def set_parameters():
+        pass
+
+    def get_parameters(self):
+        return []
+
+    def log_parameters(self):
         pass
 
     def _predict(
@@ -406,15 +415,6 @@ class ZeroMeanModel(MeanModel):
         return torch.zeros(
             scaled_zero_mean_noise.shape, dtype=torch.float, device=self.device
         )
-
-    def get_parameters(self):
-        return []
-
-    def initialize_parameters(self, observations: torch.Tensor):
-        self.n = observations.shape[1]
-
-    def log_parameters(self):
-        pass
 
 
 class ARMAMeanModel(MeanModel):
@@ -474,6 +474,21 @@ class ARMAMeanModel(MeanModel):
         self.d.set(d)
 
         self.sample_mean = initial_mean
+
+    def get_parameters(self):
+        return [self.a.value, self.b.value, self.c.value, self.d.value]
+
+    def log_parameters(self):
+        if self.a and self.b and self.c and self.d:
+            logging.info(
+                "ARMA mean model\n"
+                f"a: {self.a.value.detach().numpy()}, "
+                f"b: {self.b.value.detach().numpy()}, "
+                f"c: {self.c.value.detach().numpy()}, "
+                f"d: {self.d.value.detach().numpy()}"
+            )
+        else:
+            logging.info("ARMA mean model has no initialized parameters")
 
     def _predict(
         self,
@@ -551,21 +566,6 @@ class ARMAMeanModel(MeanModel):
             )
         return
 
-    def get_parameters(self):
-        return [self.a.value, self.b.value, self.c.value, self.d.value]
-
-    def log_parameters(self):
-        if self.a and self.b and self.c and self.d:
-            logging.info(
-                "ARMA mean model\n"
-                f"a: {self.a.value.detach().numpy()}, "
-                f"b: {self.b.value.detach().numpy()}, "
-                f"c: {self.c.value.detach().numpy()}, "
-                f"d: {self.d.value.detach().numpy()}"
-            )
-        else:
-            logging.info("ARMA mean model has no initialized parameters")
-
 
 class UnivariateScalingModel(Protocol):
     @abstractmethod
@@ -574,6 +574,10 @@ class UnivariateScalingModel(Protocol):
 
     @abstractmethod
     def get_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def log_parameters(self):
         raise NotImplementedError
 
     @abstractmethod
@@ -614,10 +618,6 @@ class UnivariateScalingModel(Protocol):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def log_parameters(self):
-        raise NotImplementedError
-
 
 class UnivariateUnitScalingModel(UnivariateScalingModel):
     def __init__(
@@ -630,7 +630,13 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         self.device = device
         self.mean_model = mean_model
 
-    def set_parameters():
+    def set_parameters(self):
+        pass
+
+    def get_parameters(self):
+        return []
+
+    def log_parameters(self):
         pass
 
     def _predict(
@@ -678,8 +684,15 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         )
         return mean_ll
 
-    def get_parameters(self):
-        return []
+    def mean_log_likelihood(self, observations: torch.Tensor):
+        """
+        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
+        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+        """
+        with torch.no_grad():
+            result = self.__mean_log_likelihood(observations)
+
+        return float(result)
 
     def fit(self, observations: torch.Tensor):
         self.mean_model.initialize_parameters(observations)
@@ -754,19 +767,6 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
             output = scaled_noise + mu
         return output, scale, mu
 
-    def mean_log_likelihood(self, observations: torch.Tensor):
-        """
-        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
-        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
-        """
-        with torch.no_grad():
-            result = self.__mean_log_likelihood(observations)
-
-        return float(result)
-
-    def log_parameters(self):
-        pass
-
 
 class UnivariateARCHModel(UnivariateScalingModel):
     def __init__(
@@ -829,6 +829,22 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.d.set(d)
 
         self.sample_mean_scale = initial_std
+
+    def get_parameters(self):
+        return [self.a.value, self.b.value, self.c.value, self.d.value]
+
+    def log_parameters(self):
+        if self.a and self.b and self.c and self.d:
+            logging.info(
+                "Univariate variance model\n"
+                f"a: {self.a.value.detach().numpy()}, "
+                f"b: {self.b.value.detach().numpy()}, "
+                f"c: {self.c.value.detach().numpy()}, "
+                f"d: {self.d.value.detach().numpy()}"
+            )
+            logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
+        else:
+            logging.info("Univariate variance model has no initialized parameters.")
 
     def _predict(
         self,
@@ -908,9 +924,6 @@ class UnivariateARCHModel(UnivariateScalingModel):
             centered_observations, scale, self.distribution
         )
         return mean_ll
-
-    def get_parameters(self):
-        return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def fit(self, observations: torch.Tensor):
         self.mean_model.initialize_parameters(observations)
@@ -1002,19 +1015,6 @@ class UnivariateARCHModel(UnivariateScalingModel):
 
         return float(result)
 
-    def log_parameters(self):
-        if self.a and self.b and self.c and self.d:
-            logging.info(
-                "Univariate variance model\n"
-                f"a: {self.a.value.detach().numpy()}, "
-                f"b: {self.b.value.detach().numpy()}, "
-                f"c: {self.c.value.detach().numpy()}, "
-                f"d: {self.d.value.detach().numpy()}"
-            )
-            logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
-        else:
-            logging.info("Univariate variance model has no initialized parameters.")
-
 
 class MultivariateARCHModel:
     def __init__(
@@ -1094,6 +1094,18 @@ class MultivariateARCHModel:
                 initial_scale, device=self.device, dtype=torch.float
             )
         self.sample_mean_scale = initial_scale
+
+    def log_parameters(self):
+        if self.a and self.b and self.c and self.d:
+            logging.info(
+                "Multivariate ARCH model\n"
+                f"a: {self.a.value.detach().numpy()},\n"
+                f"b: {self.b.value.detach().numpy()},\n"
+                f"c: {self.c.value.detach().numpy()},\n"
+                f"d: {self.d.value.detach().numpy()}"
+            )
+        else:
+            logging.info("Multivariate ARCH model has no initialized parameters")
 
     def _predict(
         self,
@@ -1207,6 +1219,27 @@ class MultivariateARCHModel:
 
         return mean_ll
 
+    def mean_log_likelihood(self, observations: torch.Tensor):
+        """
+        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
+        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
+
+        Arguments:
+            observations: torch.Tensor of shape (n_obs, n_symbols)
+
+        Return value:
+            float - mean (per sample) log likelihood
+
+        """
+        with torch.no_grad():
+            uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
+            print(uv_scale)
+            print(uv_mean)
+            centered_observations = observations - uv_mean
+            result = self.__mean_log_likelihood(centered_observations, uv_scale)
+
+        return float(result)
+
     def fit(self, observations: torch.Tensor):
         self.univariate_model.fit(observations)
         uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
@@ -1302,49 +1335,17 @@ class MultivariateARCHModel:
             if isinstance(n, int):
                 n = torch.randn(n, self.n)
 
-            mv_scale, mu = self._predict(
+            mv_scale = self._predict(
                 n, sample=True, scale_initial_value=initial_mv_scale
-            )[:2]
+            )[0]
 
-            output = (mv_scale @ n.unsqueeze(2)).squeeze(2)
+            mv_scaled_noise = (mv_scale @ n.unsqueeze(2)).squeeze(2)
 
-            output, uv_scale, mu = self.univariate_model.sample(
-                output, initial_uv_scale
+            output, uv_scale, uv_mean = self.univariate_model.sample(
+                mv_scaled_noise, initial_uv_scale
             )
 
-        return output, mv_scale, uv_scale, mu
-
-    def mean_log_likelihood(self, observations: torch.Tensor):
-        """
-        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
-        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
-
-        Arguments:
-            observations: torch.Tensor of shape (n_obs, n_symbols)
-
-        Return value:
-            float - mean (per sample) log likelihood
-
-        """
-        with torch.no_grad():
-            uv_scale = self.univariate_model.predict(observations)[0]
-            print(uv_scale)
-
-            result = self.__mean_log_likelihood(observations, uv_scale)
-
-        return float(result)
-
-    def log_parameters(self):
-        if self.a and self.b and self.c and self.d:
-            logging.info(
-                "Multivariate ARCH model\n"
-                f"a: {self.a.value.detach().numpy()},\n"
-                f"b: {self.b.value.detach().numpy()},\n"
-                f"c: {self.c.value.detach().numpy()},\n"
-                f"d: {self.d.value.detach().numpy()}"
-            )
-        else:
-            logging.info("Multivariate ARCH model has no initialized parameters")
+        return output, mv_scale, uv_scale, uv_mean
 
 
 if __name__ == "__main__":
