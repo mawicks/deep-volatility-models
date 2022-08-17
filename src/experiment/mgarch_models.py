@@ -301,6 +301,10 @@ class MeanModel(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    def get_optimizable_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
     def log_parameters(self):
         raise NotImplementedError
 
@@ -363,10 +367,13 @@ class ZeroMeanModel(MeanModel):
     def initialize_parameters(self, observations: torch.Tensor):
         self.n = observations.shape[1]
 
-    def set_parameters():
+    def set_parameters(self):
         pass
 
     def get_parameters(self):
+        return {}
+
+    def get_optimizable_parameters(self):
         return []
 
     def log_parameters(self):
@@ -476,6 +483,16 @@ class ARMAMeanModel(MeanModel):
         self.sample_mean = initial_mean
 
     def get_parameters(self):
+        return {
+            "a": self.a.value,
+            "b": self.b.value,
+            "c": self.c.value,
+            "d": self.d.value,
+            "n": self.n,
+            "sample_mean": self.sample_mean,
+        }
+
+    def get_optimizable_parameters(self):
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self):
@@ -577,6 +594,10 @@ class UnivariateScalingModel(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    def get_optimizable_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
     def log_parameters(self):
         raise NotImplementedError
 
@@ -634,6 +655,9 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         pass
 
     def get_parameters(self):
+        return {}
+
+    def get_optimizable_parameters(self):
         return []
 
     def log_parameters(self):
@@ -698,7 +722,7 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         self.mean_model.initialize_parameters(observations)
         self.mean_model.log_parameters()
 
-        mean_parameters = self.mean_model.get_parameters()
+        mean_parameters = self.mean_model.get_optimizable_parameters()
 
         # There's nothing to do unless the mean model has parameters.
         if len(mean_parameters) > 0:
@@ -731,9 +755,9 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         """
         with torch.no_grad():
             mu, mu_next = self.mean_model.predict(observations, mean_initial_value)
-            sigma, sigma_next = self._predict(observations - mu, scale_initial_value)
+            scale, scale_next = self._predict(observations - mu, scale_initial_value)
 
-        return sigma, mu, sigma_next, mu_next
+        return scale, mu, scale_next, mu_next
 
     def sample(
         self,
@@ -831,6 +855,16 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.sample_mean_scale = initial_std
 
     def get_parameters(self):
+        return {
+            "a": self.a.value,
+            "b": self.b.value,
+            "c": self.c.value,
+            "d": self.d.value,
+            "n": self.n,
+            "sample_mean_scale": self.sample_mean_scale,
+        }
+
+    def get_optimizable_parameters(self):
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self):
@@ -932,7 +966,10 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.initialize_parameters(observations)
         self.log_parameters()
 
-        parameters = self.get_parameters() + self.mean_model.get_parameters()
+        parameters = (
+            self.get_optimizable_parameters()
+            + self.mean_model.get_optimizable_parameters()
+        )
 
         optim = torch.optim.LBFGS(
             parameters,
@@ -1094,6 +1131,19 @@ class MultivariateARCHModel:
                 initial_scale, device=self.device, dtype=torch.float
             )
         self.sample_mean_scale = initial_scale
+
+    def get_parameters(self):
+        return {
+            "a": self.a,
+            "b": self.b,
+            "c": self.c,
+            "d": self.d,
+            "n": self.n,
+            "sample_mean_scale": self.sample_mean_scale,
+        }
+
+    def get_optimizable_parameters(self):
+        return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self):
         if self.a and self.b and self.c and self.d:
