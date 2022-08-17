@@ -553,6 +553,7 @@ class UnivariateScalingModel(Protocol):
         """
         raise NotImplementedError
 
+    @abstractmethod
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
@@ -560,6 +561,7 @@ class UnivariateScalingModel(Protocol):
         """
         raise NotImplementedError
 
+    @abstractmethod
     def log_parameters(self):
         raise NotImplementedError
 
@@ -675,11 +677,9 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
             if isinstance(n, int):
                 n = torch.randn(n, self.n)
 
-            scale, scale_next = self._predict(
-                n, sample=True, initial_scale=initial_sigma
-            )
-            output = scale * n
-        return output, sigma
+            scale, mu = self._predict(n, sample=True, initial_scale=initial_sigma)[:2]
+            output = scale * n + mu
+        return output, sigma, mu
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
@@ -904,10 +904,8 @@ class UnivariateARCHModel(UnivariateScalingModel):
             if isinstance(n, int):
                 n = torch.randn(n, self.n)
 
-            sigma, sigma_next = self._predict(
-                n, sample=True, initial_scale=initial_sigma
-            )
-            output = sigma * n
+            sigma, mu = self._predict(n, sample=True, initial_scale=initial_sigma)[:2]
+            output = sigma * n + mu
         return output, sigma
 
     def mean_log_likelihood(self, observations: torch.Tensor):
@@ -1188,12 +1186,13 @@ class MultivariateARCHModel:
         with torch.no_grad():
             (
                 uv_scale,
-                uv_mean,
+                mu,
                 uv_scale_next,
-                uv_mean_next,
+                mu_next,
             ) = self.univariate_model.predict(observations)
+            centered_observations = observations - mu
             normalized_mv_scale, normalized_mv_scale_next = self._predict(
-                observations / uv_scale
+                centered_observations / uv_scale
             )
             mv_scale = (
                 uv_scale.unsqueeze(2).expand(normalized_mv_scale.shape)
@@ -1204,7 +1203,7 @@ class MultivariateARCHModel:
                 * normalized_mv_scale_next
             )
 
-        return mv_scale, mv_scale_next, uv_scale, uv_scale_next
+        return mv_scale, uv_scale, mu, mv_scale_next, uv_scale_next, mu_next
 
     def sample(
         self,
@@ -1235,14 +1234,14 @@ class MultivariateARCHModel:
             if isinstance(n, int):
                 n = torch.randn(n, self.n)
 
-            mv_scale, mv_scale_next = self._predict(
+            mv_scale, mu = self._predict(
                 n, sample=True, initial_scale=initial_mv_scale
-            )
+            )[:2]
 
             output = (mv_scale @ n.unsqueeze(2)).squeeze(2)
-            output, uv_scale = univariate_model.sample(output, initial_uv_scale)
+            output, uv_scale, mu = univariate_model.sample(output, initial_uv_scale)
 
-        return output, mv_scale, uv_scale
+        return output, mv_scale, uv_scale, mu
 
     def mean_log_likelihood(self, observations: torch.Tensor):
         """

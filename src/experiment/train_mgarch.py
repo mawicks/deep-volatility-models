@@ -137,12 +137,19 @@ def run(
     multivariate_model.fit(observations)
 
     # Predict one more time with optimal parameters.
-    h, h_next, sigma, sigma_next = multivariate_model.predict(observations)
-    print("h: ", h.shape)
+    (
+        mv_scale,
+        uv_scale,
+        mu,
+        mv_scale_next,
+        uv_scale_next,
+        mu_next,
+    ) = multivariate_model.predict(observations)
+    print("mv_scale: ", mv_scale.shape)
 
     # Compute some useful quantities to display and to record
-    covariance = h @ torch.transpose(h, 1, 2)
-    predicted_covariance = h_next @ h_next.T
+    covariance = mv_scale @ torch.transpose(mv_scale, 1, 2)
+    predicted_covariance = mv_scale_next @ mv_scale_next.T
 
     sigma = torch.sqrt(torch.diagonal(covariance, dim1=1, dim2=2))
     predicted_sigma = torch.sqrt(torch.diag(predicted_covariance))
@@ -155,10 +162,10 @@ def run(
     )
 
     result = {
-        "transformation": h.numpy(),
-        "predicted_transformation": h_next.numpy(),
-        "sigma": sigma.numpy(),
-        "predicted_sigma": predicted_sigma.numpy(),
+        "transformation": mv_scale.numpy(),
+        "predicted_mv_scale": mv_scale_next.numpy(),
+        "uv_scale": uv_scale.numpy(),
+        "predicted_uv_scale": uv_scale_next.numpy(),
         "covariance": covariance.numpy(),
         "predicted_covariance": predicted_covariance.numpy(),
         "correlation": correlation.numpy(),
@@ -168,8 +175,9 @@ def run(
 
     torch.save(result, "mgarch_output.pt")
 
-    logging.info(f"Transformation estimates:\n{h}")
-    logging.info(f"sigma:\n{sigma}")
+    logging.info(f"MV transformation estimates:\n{mv_scale}")
+    logging.info(f"UV scale estiamtes:\n{uv_scale}")
+    logging.info(f"mean estiamtes:\n{mu}")
     logging.info(f"correlations:\n{correlation}")
 
     # Compute the final loss
