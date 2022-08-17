@@ -332,29 +332,26 @@ class MeanModel(Protocol):
         """
         raise NotImplementedError
 
-    @abstractmethod
     def predict(self, observations: torch.Tensor, initial_mean=None):
         """
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
-        raise NotImplementedError
+        with torch.no_grad():
+            mu, mu_next = self._predict(observations, initial_mean)
 
-    @abstractmethod
+        return mu, mu_next
+
     def sample(
         self,
         scaled_zero_mean_noise: torch.Tensor,
-        initial_mu: Union[torch.Tensor, None],
+        initial_mean: Union[torch.Tensor, None],
     ):
-        """
-        Generate a random sampled output from the model.
-        Arguments:
-            scaled_zero_mean_noise: torch.Tensor - Scaled noise to use as input
-            initial_mu: torch.Tensor - Initial condition for mu if needed.
-        Returns:
-            mu: torch.Tensor - Sample model output
-        """
-        raise NotImplementedError
+        with torch.no_grad():
+            mu = self.__predict(
+                scaled_zero_mean_noise, sample=True, initial_mean=initial_mu
+            )
+        return
 
 
 class ZeroMeanModel(MeanModel):
@@ -406,22 +403,6 @@ class ZeroMeanModel(MeanModel):
             observations.shape[1], dtype=torch.float, device=self.device
         )
         return mu, mu_next
-
-    def predict(self, observations: torch.Tensor, initial_mean=None):
-        """
-        This is the inference version of predict(), which is the version clients would normally use.
-        It doesn't compute any gradient information, so it should be faster.
-        """
-        return self._predict(observations, initial_mean)
-
-    def sample(
-        self,
-        scaled_zero_mean_noise: torch.Tensor,
-        initial_mu: Union[torch.Tensor, None],
-    ):
-        return torch.zeros(
-            scaled_zero_mean_noise.shape, dtype=torch.float, device=self.device
-        )
 
 
 class ARMAMeanModel(MeanModel):
@@ -562,27 +543,6 @@ class ARMAMeanModel(MeanModel):
         mu = torch.stack(mu_sequence)
         return mu, mu_t
 
-    def predict(self, observations: torch.Tensor, initial_mean=None):
-        """
-        This is the inference version of predict(), which is the version clients would normally use.
-        It doesn't compute any gradient information, so it should be faster.
-        """
-        with torch.no_grad():
-            mu, mu_next = self._predict(observations, initial_mean)
-
-        return mu, mu_next
-
-    def sample(
-        self,
-        scaled_zero_mean_noise: torch.Tensor,
-        initial_mean: Union[torch.Tensor, None],
-    ):
-        with torch.no_grad():
-            mu = self.__predict(
-                scaled_zero_mean_noise, sample=True, initial_mean=initial_mu
-            )
-        return
-
 
 class UnivariateScalingModel(Protocol):
     @abstractmethod
@@ -595,6 +555,11 @@ class UnivariateScalingModel(Protocol):
 
     @abstractmethod
     def get_optimizable_parameters(self):
+        """
+        Arguments: None
+        Returns a list of parameters that can be used in a
+         `torch.optim.Optimizer` constructor.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -606,38 +571,87 @@ class UnivariateScalingModel(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    def _predict(
+        self,
+        centered_observations: torch.Tensor,
+        sample=False,
+        initial_scale=None,
+    ):
+        """Given a, b, c, d, and observations, generate the *estimated*
+        standard deviations (marginal) for each observation
+
+        Argument:
+            centered_observations: torch.Tensor of dimension (n_obs, n_symbols)
+                                   of centered observations
+            sample: bool - Run the model in 'sampling' mode, in which
+                           case `observations` is zero-mean, unit-variance noise
+                           rather than actual observations.
+            initial_scale: torch.Tensor - Initial condition for scale
+            initial_mean: torch.Tensor - Initial condition for mean
+        Returns:
+            scale: torch.Tensor of scale predictions for each observation
+            scale_next: torch.Tensor scale prediction for next unobserved value
+
+        """
+        raise notImplementedError
+
     def predict(
         self,
         observations: torch.Tensor,
+        scale_initial_value: Union[torch.Tensor, None] = None,
+        mean_initial_value: Union[torch.Tensor, None] = None,
     ):
         """
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
-        raise NotImplementedError
+        with torch.no_grad():
+            mu, mu_next = self.mean_model.predict(observations, mean_initial_value)
+            scale, scale_next = self._predict(observations - mu, scale_initial_value)
 
-    @abstractmethod
-    def sample(
-        self, n: Union[torch.Tensor, int], initial_sigma: Union[torch.Tensor, None]
-    ):
-        """
-        Generate a random sampled output from the model.
-        Arguments:
-            n: torch.Tensor - Noise to use as input or
-               int - Number of points to generate, in which case GWN is used.
-        Returns:
-            output: torch.Tensor - Sample model output
-            sigma: torch.Tensor - Sigma value used to scale the sample
-        """
-        raise NotImplementedError
+        return scale, mu, scale_next, mu_next
 
-    @abstractmethod
     def mean_log_likelihood(self, observations: torch.Tensor):
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
         """
-        raise NotImplementedError
+        with torch.no_grad():
+            result = self.__mean_log_likelihood(observations)
+
+        return float(result)
+
+    def sample(
+        self,
+        n: Union[torch.Tensor, int],
+        mean_initial_value: Union[torch.Tensor, None],
+        scale_initial_value: Union[torch.Tensor, None],
+    ):
+        """
+        Generate a random sampled output from the model.
+        Arguments:
+            n: torch.Tensor - CENTERED, UNSCALED (but possibly correlated)
+                              noise to used as input or
+                        int - Number of points to generate, in which case
+                              GWN is generated here and used.
+        Returns:
+            output: torch.Tensor - Sample model output
+            scale: torch.Tensor - Scale value used to produce the sample
+            mean: torch.Tensor - Mean value used to produce the sample
+        """
+        with torch.no_grad():
+            if isinstance(n, int):
+                n = torch.randn(n, self.n)
+
+            scale = self._predict(
+                n, sample=True, scale_initial_value=scale_initial_value
+            )[0]
+            scaled_noise = scale * noise
+            mu = self.mean_model._predict(
+                scaled_noise, sample=True, mean_initial_value=mean_initial_value
+            )
+            output = scaled_noise + mu
+        return output, scale, mu
 
 
 class UnivariateUnitScalingModel(UnivariateScalingModel):
@@ -686,9 +700,11 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
 
         """
         # Set all of the scaling to ones.
-        scale = torch.ones(observations.shape, dtype=torch.float, device=self.device)
+        scale = torch.ones(
+            centered_observations.shape, dtype=torch.float, device=self.device
+        )
         scale_next = torch.ones(
-            observations.shape[1], dtype=torch.float, device=self.device
+            centered_observations.shape[1], dtype=torch.float, device=self.device
         )
         return scale, scale_next
 
@@ -707,16 +723,6 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
             centered_observations, scale, self.distribution
         )
         return mean_ll
-
-    def mean_log_likelihood(self, observations: torch.Tensor):
-        """
-        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
-        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
-        """
-        with torch.no_grad():
-            result = self.__mean_log_likelihood(observations)
-
-        return float(result)
 
     def fit(self, observations: torch.Tensor):
         self.mean_model.initialize_parameters(observations)
@@ -742,54 +748,6 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
             optimize(optim, loss_closure, "univariate model")
 
             self.mean_model.log_parameters()
-
-    def predict(
-        self,
-        observations: torch.Tensor,
-        scale_initial_value: Union[torch.Tensor, None] = None,
-        mean_initial_value: Union[torch.Tensor, None] = None,
-    ):
-        """
-        This is the inference version of predict(), which is the version clients would normally use.
-        It doesn't compute any gradient information, so it should be faster.
-        """
-        with torch.no_grad():
-            mu, mu_next = self.mean_model.predict(observations, mean_initial_value)
-            scale, scale_next = self._predict(observations - mu, scale_initial_value)
-
-        return scale, mu, scale_next, mu_next
-
-    def sample(
-        self,
-        n: Union[torch.Tensor, int],
-        mean_initial_value: Union[torch.Tensor, None],
-        scale_initial_value: Union[torch.Tensor, None],
-    ):
-        """
-        Generate a random sampled output from the model.
-        Arguments:
-            n: torch.Tensor - CENTERED, UNSCALED (but possibly correlated)
-                              noise to used as input or
-                        int - Number of points to generate, in which case
-                              GWN is generated here and used.
-        Returns:
-            output: torch.Tensor - Sample model output
-            scale: torch.Tensor - Scale value used to produce the sample
-            mean: torch.Tensor - Mean value used to produce the sample
-        """
-        with torch.no_grad():
-            if isinstance(n, int):
-                n = torch.randn(n, self.n)
-
-            scale = self._predict(
-                n, sample=True, scale_initial_value=scale_initial_value
-            )[0]
-            scaled_noise = scale * noise
-            mu = self.mean_model._predict(
-                scaled_noise, sample=True, mean_initial_value=mean_initial_value
-            )
-            output = scaled_noise + mu
-        return output, scale, mu
 
 
 class UnivariateARCHModel(UnivariateScalingModel):
@@ -994,63 +952,6 @@ class UnivariateARCHModel(UnivariateScalingModel):
 
         self.log_parameters()
         self.mean_model.log_parameters()
-
-    def predict(
-        self,
-        observations: torch.Tensor,
-        scale_initial_value: Union[torch.Tensor, None] = None,
-        mean_initial_value: Union[torch.Tensor, None] = None,
-    ):
-        """
-        This is the inference version of predict(), which is the version clients would normally use.
-        It doesn't compute any gradient information, so it should be faster.
-        """
-        with torch.no_grad():
-            mu, mu_next = self.mean_model.predict(observations, mean_initial_value)
-            sigma, sigma_next = self._predict(observations)
-
-        return sigma, mu, sigma_next, mu_next
-
-    def sample(
-        self,
-        n: Union[torch.Tensor, int],
-        mean_initial_value: Union[torch.Tensor, None],
-        scale_initial_value: Union[torch.Tensor, None],
-    ):
-        """
-        Generate a random sampled output from the model.
-        Arguments:
-            n: torch.Tensor - CENTERED, UNSCALED (but possibly correlated)
-                              noise to used as input or
-                        int - Number of points to generate, in which case
-                              GWN is generated here and used.
-        Returns:
-            output: torch.Tensor - Sample model output
-            scale: torch.Tensor - Scale value used to produce the sample
-            mean: torch.Tensor - Mean value used to produce the sample
-        """
-        with torch.no_grad():
-            if isinstance(n, int):
-                n = torch.randn(n, self.n)
-            scale = self._predict(
-                n, sample=True, scale_initial_value=scale_initial_value
-            )[0]
-            scaled_noise = scale * noise
-            mu = self.mean_model._predict(
-                scaled_noise, sample=True, mean_initial_value=mean_initial_value
-            )[0]
-            output = scaled_noise + mu
-        return output, scale, mu
-
-    def mean_log_likelihood(self, observations: torch.Tensor):
-        """
-        This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
-        It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
-        """
-        with torch.no_grad():
-            result = self.__mean_log_likelihood(observations)
-
-        return float(result)
 
 
 class MultivariateARCHModel:
