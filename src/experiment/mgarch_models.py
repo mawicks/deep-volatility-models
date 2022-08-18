@@ -14,18 +14,14 @@ import torch
 DEBUG = False
 PROGRESS_ITERATIONS = 20
 
-INITIAL_DECAY = 0.30
-LEARNING_RATE = 0.25
+INITIAL_DECAY = 0.10
+LEARNING_RATE = 1.0
 EPS = 1e-6
 
 MAX_CLAMP = 1e10
 MIN_CLAMP = -MAX_CLAMP
 
 DEFAULT_SEED = 42
-
-normal_distribution = torch.distributions.normal.Normal(
-    loc=torch.tensor(0.0), scale=torch.tensor(1.0)
-)
 
 
 class ParameterConstraint(Enum):
@@ -136,6 +132,79 @@ class FullParameter:
             raise e
 
 
+class Distribution(Protocol):
+    @abstractmethod
+    def set_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_optimizable_parameters(self):
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_instance(self):
+        raise NotImplementedError
+
+    def set_device(self, device):
+        self.device = device
+
+
+class NormalDistribution(Distribution):
+    def __init__(self, device=None):
+        self.device = device
+        self.instance = torch.distributions.normal.Normal(
+            loc=torch.tensor(0.0, dtype=torch.float, device=device),
+            scale=torch.tensor(1.0, dtype=torch.float, device=device),
+        )
+
+    def set_parameters(self, dof: Union[float, torch.Tensor]):
+        pass
+
+    def get_parameters(self):
+        return {}
+
+    def log_parameters(self):
+        return
+
+    def get_optimizable_parameters(self):
+        return []
+
+    def get_instance(self):
+        return self.instance
+
+
+class StudentTDistribution(Distribution):
+    def __init__(self, device):
+        self.device = device
+        self.dof = torch.tensor(
+            6.0, dtype=torch.float, device=device, requires_grad=True
+        )
+
+    def set_parameters(self, dof: Union[float, torch.Tensor]):
+        if not isinstance(dof, torch.Tensor):
+            dof = torch.tensor(dof, dtype=torch.float, device=self.device)
+        dof.requires_grad = True
+        self.dof = dof
+
+    def get_parameters(self):
+        return {"dof": self.dof}
+
+    def log_parameters(self):
+        logging.info(f"StudentT DOF: {self.dof:.3f}")
+
+    def get_optimizable_parameters(self):
+        print("dof: ", self.dof)
+
+        return [self.dof]
+
+    def get_instance(self):
+        return torch.distributions.studentT.StudentT(self.dof)
+
+
 def make_diagonal_nonnegative(m: torch.Tensor):
     """Given a single lower triangular matrices m, return an `equivalent` matrix
     having non-negative diagonal entries.  Here `equivalent` means m@m.T is unchanged.
@@ -169,7 +238,7 @@ def random_lower_triangular(
 def marginal_conditional_log_likelihood(
     observations: torch.Tensor,
     scale: torch.Tensor,
-    distribution: torch.distributions.Distribution,
+    distribution: Distribution,
 ):
     """
     Arguments:
@@ -186,7 +255,7 @@ def marginal_conditional_log_likelihood(
     logging.debug(f"scaled_observations: \n{scaled_observations}")
 
     # Compute the log likelihoods on the innovations
-    ll = distribution.log_prob(scaled_observations) - torch.log(scale)
+    ll = distribution.get_instance().log_prob(scaled_observations) - torch.log(scale)
 
     # For consistency with the multivariate case, we *sum* over the
     # variables (columns) first and *average* over the rows (observations).
@@ -199,8 +268,8 @@ def marginal_conditional_log_likelihood(
 def joint_conditional_log_likelihood(
     observations: torch.Tensor,
     mv_scale: torch.Tensor,
+    distribution: Distribution,
     uv_scale=Union[torch.Tensor, None],
-    distribution: torch.distributions.Distribution = normal_distribution,
 ):
     """
     Arguments:
@@ -250,7 +319,7 @@ def joint_conditional_log_likelihood(
     logging.debug(f"e: \n{e}")
 
     # Compute the log likelihoods on the innovations
-    log_pdf = distribution.log_prob(e)
+    log_pdf = distribution.get_instance().log_prob(e)
 
     ll = torch.sum(log_pdf - log_det, dim=1)
 
@@ -596,6 +665,8 @@ class UnivariateScalingModel(Protocol):
         raise notImplementedError
 
     def fit(self, observations: torch.Tensor):
+        self.distribution.log_parameters()
+
         self.mean_model.initialize_parameters(observations)
         self.mean_model.log_parameters()
 
@@ -603,8 +674,9 @@ class UnivariateScalingModel(Protocol):
         self.log_parameters()
 
         parameters = (
-            self.get_optimizable_parameters()
+            self.distribution.get_optimizable_parameters()
             + self.mean_model.get_optimizable_parameters()
+            + self.get_optimizable_parameters()
         )
         if len(parameters) > 0:
             optim = torch.optim.LBFGS(
@@ -628,6 +700,7 @@ class UnivariateScalingModel(Protocol):
 
             optimize(optim, loss_closure, "univariate model")
 
+            self.distribution.log_parameters()
             self.mean_model.log_parameters()
             self.log_parameters()
 
@@ -705,11 +778,12 @@ class UnivariateScalingModel(Protocol):
 class UnivariateUnitScalingModel(UnivariateScalingModel):
     def __init__(
         self,
-        distribution: torch.distributions.Distribution = normal_distribution,
+        distribution: Distribution = NormalDistribution(),
         device: Union[torch.device, None] = None,
         mean_model: MeanModel = ZeroMeanModel(),
     ):
         self.distribution = distribution
+        self.distribution.set_device(device)
         self.device = device
         self.mean_model = mean_model
 
@@ -765,13 +839,14 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
 class UnivariateARCHModel(UnivariateScalingModel):
     def __init__(
         self,
-        distribution: torch.distributions.Distribution = normal_distribution,
+        distribution: Distribution = NormalDistribution(),
         device: Union[torch.device, None] = None,
         mean_model: MeanModel = ZeroMeanModel(),
     ):
         self.n = self.a = self.b = self.c = self.d = None
         self.sample_mean_scale = None
         self.distribution = distribution
+        self.distribution.set_device(device)
         self.device = device
         self.mean_model = mean_model
 
@@ -923,12 +998,13 @@ class MultivariateARCHModel:
         self,
         constraint=ParameterConstraint.FULL,
         univariate_model: UnivariateScalingModel = UnivariateUnitScalingModel(),
-        distribution: torch.distributions.Distribution = normal_distribution,
+        distribution: Distribution = NormalDistribution(),
         device: torch.device = None,
     ):
         self.constraint = constraint
         self.univariate_model = univariate_model
         self.distribution = distribution
+        self.distribution.set_device(device)
         self.device = device
 
         # There should be a better way to do this.  Maybe add a set_device method.
@@ -1052,7 +1128,7 @@ class MultivariateARCHModel:
         scale_t = scale_t_T.T
 
         if DEBUG:
-            print(f"Initial scalet: {scale_t}")
+            print(f"Initial scale: {scale_t}")
             print(f"self.d: {self.d.value}")
             print(f"self.sample_mean_scale: {self.sample_mean_scale}")
         scale_sequence = []
@@ -1144,8 +1220,6 @@ class MultivariateARCHModel:
         """
         with torch.no_grad():
             uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
-            print(uv_scale)
-            print(uv_mean)
             centered_observations = observations - uv_mean
             result = self.__mean_log_likelihood(centered_observations, uv_scale)
 
@@ -1167,8 +1241,13 @@ class MultivariateARCHModel:
         self.sample_mean_scale = make_diagonal_nonnegative(self.sample_mean_scale)
         logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
 
+        parameters = (
+            self.get_optimizable_parameters()
+            + self.distribution.get_optimizable_parameters()
+        )
+
         optim = torch.optim.LBFGS(
-            [self.a.value, self.b.value, self.c.value, self.d.value],
+            parameters,
             max_iter=PROGRESS_ITERATIONS,
             lr=LEARNING_RATE,
             line_search_fn="strong_wolfe",
@@ -1191,6 +1270,7 @@ class MultivariateARCHModel:
 
         optimize(optim, loss_closure, "multivariate model")
 
+        self.distribution.log_parameters()
         self.log_parameters()
 
         logging.debug("Gradients: ")
