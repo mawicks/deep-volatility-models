@@ -844,7 +844,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         mean_model: MeanModel = ZeroMeanModel(),
     ):
         self.n = self.a = self.b = self.c = self.d = None
-        self.sample_mean_scale = None
+        self.sample_scale = None
         self.distribution = distribution
         self.distribution.set_device(device)
         self.device = device
@@ -856,7 +856,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.b = DiagonalParameter(self.n, INITIAL_DECAY, device=self.device)
         self.c = DiagonalParameter(self.n, 1.0, device=self.device)
         self.d = DiagonalParameter(self.n, 1.0, device=self.device)
-        self.sample_mean_scale = torch.std(observations, dim=0)
+        self.sample_scale = torch.std(observations, dim=0)
 
     def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_std: Any):
         if not isinstance(a, torch.Tensor):
@@ -897,7 +897,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.c.set(c)
         self.d.set(d)
 
-        self.sample_mean_scale = initial_std
+        self.sample_scale = initial_std
 
     def get_parameters(self):
         return {
@@ -906,7 +906,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
             "c": self.c.value,
             "d": self.d.value,
             "n": self.n,
-            "sample_mean_scale": self.sample_mean_scale,
+            "sample_scale": self.sample_scale,
         }
 
     def get_optimizable_parameters(self):
@@ -921,7 +921,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
                 f"c: {self.c.value.detach().numpy()}, "
                 f"d: {self.d.value.detach().numpy()}"
             )
-            logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
+            logging.info(f"sample_scale:\n{self.sample_scale}")
         else:
             logging.info("Univariate variance model has no initialized parameters.")
 
@@ -956,7 +956,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
                 )
             scale_t = scale_initial_value
         else:
-            scale_t = self.d @ self.sample_mean_scale  # type: ignore
+            scale_t = self.d @ self.sample_scale  # type: ignore
 
         # mu, mu_next = self.mean_model._predict(centered_observations)
         # centered_observations = observations - mu
@@ -968,7 +968,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
             # Store the current ht before predicting next one
             scale_sequence.append(scale_t)
 
-            # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_mean_scale)**2
+            # The variance is (a * sigma)**2 + (b * o)**2 + (c * sample_scale)**2
             # While searching over the parameter space, an unstable value for `a` may be tested.
             # Clamp to prevent it from overflowing.
             a_sigma = torch.clamp(self.a @ scale_t, min=MIN_CLAMP, max=MAX_CLAMP)
@@ -978,7 +978,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
                 obs = scale_t * obs
 
             b_o = self.b @ obs
-            c_sample_mean_scale = self.c @ self.sample_mean_scale  # type: ignore
+            c_sample_scale = self.c @ self.sample_scale  # type: ignore
 
             # To avoid numerical issues associated with expressions of the form
             # sqrt(a**2 + b**2 + c**2), we use a similar trick as for the multivariate
@@ -986,7 +986,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
             # the column norms.  We depend on the vector_norm()
             # implementation being stable.
 
-            m = torch.stack((a_sigma, b_o, c_sample_mean_scale), dim=0)
+            m = torch.stack((a_sigma, b_o, c_sample_scale), dim=0)
             scale_t = torch.linalg.vector_norm(m, dim=0)
 
         scale = torch.stack(scale_sequence)
@@ -1030,7 +1030,7 @@ class MultivariateARCHModel:
         self.d = self.parameter_factory(n, 1.0, device=self.device)
         self.log_parameters()
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_mean_scale: Any):
+    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_scale: Any):
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -1039,21 +1039,21 @@ class MultivariateARCHModel:
             c = torch.tensor(c, dtype=torch.float, device=self.device)
         if not isinstance(d, torch.Tensor):
             d = torch.tensor(d, dtype=torch.float, device=self.device)
-        if not isinstance(sample_mean_scale, torch.Tensor):
-            sample_mean_scale = torch.tensor(
-                sample_mean_scale, dtype=torch.float, device=self.device
+        if not isinstance(sample_scale, torch.Tensor):
+            sample_scale = torch.tensor(
+                sample_scale, dtype=torch.float, device=self.device
             )
         if (
             len(a.shape) != 2
             or a.shape != b.shape
             or a.shape != c.shape
             or a.shape != d.shape
-            or a.shape != sample_mean_scale.shape
+            or a.shape != sample_scale.shape
         ):
             raise ValueError(
                 f"There must be two dimensions of a({a.shape}), b({b.shape}), "
                 f"c({c.shape}), d({d.shape}), and "
-                f"sample_mean_scale({sample_mean_scale.shape}) that all agree"
+                f"sample_scale({sample_scale.shape}) that all agree"
             )
 
         self.n = a.shape[0]
@@ -1067,7 +1067,7 @@ class MultivariateARCHModel:
         self.c.set(c)
         self.d.set(d)
 
-        self.sample_mean_scale = sample_mean_scale
+        self.sample_scale = sample_scale
 
     def get_parameters(self):
         return {
@@ -1076,7 +1076,7 @@ class MultivariateARCHModel:
             "c": self.c,
             "d": self.d,
             "n": self.n,
-            "sample_mean_scale": self.sample_mean_scale,
+            "sample_scale": self.sample_scale,
         }
 
     def get_optimizable_parameters(self):
@@ -1120,7 +1120,7 @@ class MultivariateARCHModel:
                 )
             scale_t = scale_initial_value
         else:
-            scale_t = self.d @ self.sample_mean_scale
+            scale_t = self.d @ self.sample_scale
 
         # We require ht to be lower traingular (even when parameters are full)
         # Ensure this using QR.
@@ -1130,7 +1130,7 @@ class MultivariateARCHModel:
         if DEBUG:
             print(f"Initial scale: {scale_t}")
             print(f"self.d: {self.d.value}")
-            print(f"self.sample_mean_scale: {self.sample_mean_scale}")
+            print(f"self.sample_scale: {self.sample_scale}")
         scale_sequence = []
 
         for k, obs in enumerate(observations):
@@ -1147,9 +1147,9 @@ class MultivariateARCHModel:
                 obs = scale_t @ obs
 
             b_o = (self.b @ obs).unsqueeze(1)
-            c_hbar = self.c @ self.sample_mean_scale
+            c_hbar = self.c @ self.sample_scale
 
-            # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ sample_mean_scale) @ (c @ sample_mean_scale).T
+            # The covariance is a_ht @ a_ht.T + b_o @ b_o.T + (c @ sample_scale) @ (c @ sample_scale).T
             # Unnecessary squaring is discouraged for nunerical stability.
             # Instead, we use only square roots and never explicity
             # compute the covariance.  This is a common 'trick' achieved
@@ -1235,11 +1235,11 @@ class MultivariateARCHModel:
         centered_observations = observations - uv_mean
         unscaled_centered_observations = centered_observations / uv_scale
 
-        self.sample_mean_scale = (
+        self.sample_scale = (
             torch.linalg.qr(unscaled_centered_observations, mode="reduced")[1]
         ).T / torch.sqrt(torch.tensor(unscaled_centered_observations.shape[0]))
-        self.sample_mean_scale = make_diagonal_nonnegative(self.sample_mean_scale)
-        logging.info(f"sample_mean_scale:\n{self.sample_mean_scale}")
+        self.sample_scale = make_diagonal_nonnegative(self.sample_scale)
+        logging.info(f"sample_scale:\n{self.sample_scale}")
 
         parameters = (
             self.get_optimizable_parameters()
@@ -1363,7 +1363,7 @@ if __name__ == "__main__":
         b=[[0.4, 0.0, 0.0], [0.1, 0.3, 0.0], [0.13, 0.08, 0.2]],
         c=[[0.07, 0.0, 0.0], [0.04, 0.1, 0.0], [0.05, 0.005, 0.08]],
         d=[[1.0, 0.0, 0.0], [0.1, 0.6, 0.0], [-1.2, -0.8, 2]],
-        sample_mean_scale=[
+        sample_scale=[
             [0.008, 0.0, 0.0],
             [0.008, 0.01, 0.0],
             [0.008, 0.009, 0.005],
