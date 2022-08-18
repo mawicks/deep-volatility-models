@@ -3,7 +3,7 @@ from abc import abstractmethod
 import logging
 
 import os
-from typing import Any, Callable, Dict, Iterable, Iterator, Protocol, Union, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Protocol, Tuple, Union
 
 from enum import Enum
 
@@ -31,7 +31,17 @@ class ParameterConstraint(Enum):
     FULL = "full"
 
 
-class ScalarParameter:
+class Parameter(Protocol):
+    @abstractmethod
+    def set(self, value: Any) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def __matmul__(self, other: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class ScalarParameter(Parameter):
     def __init__(
         self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
     ):
@@ -39,14 +49,14 @@ class ScalarParameter:
         self.value = scale * torch.tensor(1.0, device=device)
         self.value.requires_grad = True
 
-    def set(self, value: Union[float, torch.Tensor]):
+    def set(self, value: Any) -> None:
         if not isinstance(value, torch.Tensor):
             value = torch.tensor(
                 value, device=self.device, dtype=torch.float, requires_grad=True
             )
         self.value = value
 
-    def __matmul__(self, other: torch.Tensor):
+    def __matmul__(self, other: torch.Tensor) -> torch.Tensor:
         try:
             return self.value * other
         except Exception as e:
@@ -56,7 +66,7 @@ class ScalarParameter:
             raise e
 
 
-class DiagonalParameter:
+class DiagonalParameter(Parameter):
     def __init__(
         self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
     ):
@@ -64,7 +74,7 @@ class DiagonalParameter:
         self.value = scale * torch.ones(n, device=device)
         self.value.requires_grad = True
 
-    def set(self, value: torch.Tensor):
+    def set(self, value: Any) -> None:
         if not isinstance(value, torch.Tensor):
             value = torch.tensor(
                 value, device=self.device, dtype=torch.float, requires_grad=True
@@ -75,7 +85,7 @@ class DiagonalParameter:
 
         self.value = value
 
-    def __matmul__(self, other: torch.Tensor):
+    def __matmul__(self, other: torch.Tensor) -> torch.Tensor:
         try:
             return self.value * other
         except Exception as e:
@@ -85,7 +95,7 @@ class DiagonalParameter:
             raise e
 
 
-class TriangularParameter:
+class TriangularParameter(Parameter):
     def __init__(
         self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
     ):
@@ -93,9 +103,16 @@ class TriangularParameter:
         self.value = scale * torch.eye(n, device=device)
         self.value.requires_grad = True
 
-    def __matmul__(self, other: torch.Tensor):
-        # self.value was initialized to be triangular, so this
-        # torch.tril() may seem unnecessary.  Using the torch.tril()
+    def set(self, value: Any) -> None:
+        if not isinstance(value, torch.Tensor):
+            value = torch.tensor(
+                value, device=self.device, dtype=torch.float, requires_grad=True
+            )
+        self.value = torch.tril(value)
+
+    def __matmul__(self, other: torch.Tensor) -> torch.Tensor:
+        # self.value was initialized to be triangular, so the
+        # torch.tril() below may seem unnecessary.  Using the torch.tril()
         # ensures that the upper entries remain excluded from gradient
         # calculations and don't get updated by the optimizer.
         try:
@@ -115,14 +132,14 @@ class FullParameter:
         self.value = scale * torch.eye(n, device=device)
         self.value.requires_grad = True
 
-    def set(self, value: Any):
+    def set(self, value: Any) -> None:
         if not isinstance(value, torch.Tensor):
             value = torch.tensor(
                 value, device=self.device, dtype=torch.float, requires_grad=True
             )
         self.value = value
 
-    def __matmul__(self, other: torch.Tensor):
+    def __matmul__(self, other: torch.Tensor) -> torch.Tensor:
         try:
             return self.value @ other
         except Exception as e:
@@ -134,22 +151,22 @@ class FullParameter:
 
 class Distribution(Protocol):
     @abstractmethod
-    def set_parameters(self):
+    def set_parameters(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         raise NotImplementedError
 
     @abstractmethod
-    def get_instance(self):
+    def get_instance(self) -> torch.distributions.Distribution:
         raise NotImplementedError
 
-    def set_device(self, device):
+    def set_device(self, device) -> None:
         self.device = device
 
 
@@ -161,19 +178,19 @@ class NormalDistribution(Distribution):
             scale=torch.tensor(1.0, dtype=torch.float, device=device),
         )
 
-    def set_parameters(self, dof: Union[float, torch.Tensor]):
+    def set_parameters(self, dof: Union[float, torch.Tensor]) -> None:
         pass
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {}
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         return
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return []
 
-    def get_instance(self):
+    def get_instance(self) -> torch.distributions.Distribution:
         return self.instance
 
 
@@ -184,28 +201,28 @@ class StudentTDistribution(Distribution):
             6.0, dtype=torch.float, device=device, requires_grad=True
         )
 
-    def set_parameters(self, dof: Union[float, torch.Tensor]):
+    def set_parameters(self, dof: Union[float, torch.Tensor]) -> None:
         if not isinstance(dof, torch.Tensor):
             dof = torch.tensor(dof, dtype=torch.float, device=self.device)
         dof.requires_grad = True
         self.dof = dof
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {"dof": self.dof}
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         logging.info(f"StudentT DOF: {self.dof:.3f}")
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         print("dof: ", self.dof)
 
         return [self.dof]
 
-    def get_instance(self):
+    def get_instance(self) -> torch.distributions.Distribution:
         return torch.distributions.studentT.StudentT(self.dof)
 
 
-def make_diagonal_nonnegative(m: torch.Tensor):
+def make_diagonal_nonnegative(m: torch.Tensor) -> torch.Tensor:
     """Given a single lower triangular matrices m, return an `equivalent` matrix
     having non-negative diagonal entries.  Here `equivalent` means m@m.T is unchanged.
 
@@ -226,7 +243,7 @@ def random_lower_triangular(
     scale: Union[torch.Tensor, float] = 1.0,
     requires_grad: bool = True,
     device: Union[torch.device, None] = None,
-):
+) -> torch.Tensor:
     if not isinstance(scale, torch.Tensor):
         scale = torch.tensor(scale, device=device)
     m = torch.rand(n, n, device=device) - 0.5
@@ -239,7 +256,7 @@ def marginal_conditional_log_likelihood(
     observations: torch.Tensor,
     scale: torch.Tensor,
     distribution: torch.distributions.Distribution,
-):
+) -> torch.Tensor:
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
@@ -270,7 +287,7 @@ def joint_conditional_log_likelihood(
     mv_scale: torch.Tensor,
     distribution: torch.distributions.Distribution,
     uv_scale=Union[torch.Tensor, None],
-):
+) -> torch.Tensor:
     """
     Arguments:
        observations: torch.Tensor of shape (n_obs, n_symbols)
@@ -328,7 +345,7 @@ def joint_conditional_log_likelihood(
 
 def optimize(
     optim: torch.optim.Optimizer, closure: Callable[[], torch.Tensor], label: str = ""
-):
+) -> None:
     """
     This is a wrapper around optim.step() that higher level monitoring.
     Arguments:
@@ -362,19 +379,19 @@ class MeanModel(Protocol):
         raise NotImplementedError
 
     @abstractmethod
-    def set_parameters():
+    def set_parameters() -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         raise NotImplementedError
 
     @abstractmethod
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -382,7 +399,7 @@ class MeanModel(Protocol):
         self,
         observations: torch.Tensor,
         mean_initial_value: Union[torch.Tensor, Any, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -401,7 +418,9 @@ class MeanModel(Protocol):
         """
         raise NotImplementedError
 
-    def predict(self, observations: torch.Tensor, initial_mean=None):
+    def predict(
+        self, observations: torch.Tensor, initial_mean=None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
@@ -415,12 +434,13 @@ class MeanModel(Protocol):
         self,
         scaled_zero_mean_noise: torch.Tensor,
         initial_mean: Union[torch.Tensor, None],
-    ):
+    ) -> torch.Tensor:
+        raise Exception("sample() called.")
         with torch.no_grad():
             mu = self.__predict(
                 scaled_zero_mean_noise, sample=True, initial_mean=initial_mu
             )
-        return
+        return mu
 
 
 class ZeroMeanModel(MeanModel):
@@ -430,19 +450,19 @@ class ZeroMeanModel(MeanModel):
     ):
         self.device = device
 
-    def initialize_parameters(self, observations: torch.Tensor):
+    def initialize_parameters(self, observations: torch.Tensor) -> None:
         self.n = observations.shape[1]
 
-    def set_parameters(self):
+    def set_parameters(self) -> None:
         pass
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {}
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return []
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         pass
 
     def _predict(
@@ -450,7 +470,7 @@ class ZeroMeanModel(MeanModel):
         observations: torch.Tensor,
         sample: bool = False,
         mean_initial_value: Union[torch.Tensor, Any, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -483,7 +503,7 @@ class ARMAMeanModel(MeanModel):
         self.sample_mean = None
         self.device = device
 
-    def initialize_parameters(self, observations: torch.Tensor):
+    def initialize_parameters(self, observations: torch.Tensor) -> None:
         self.n = observations.shape[1]
         self.a = DiagonalParameter(self.n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = DiagonalParameter(self.n, INITIAL_DECAY, device=self.device)
@@ -491,7 +511,7 @@ class ARMAMeanModel(MeanModel):
         self.d = DiagonalParameter(self.n, 1.0, device=self.device)
         self.sample_mean = torch.mean(observations, dim=0)
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_mean: Any):
+    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_mean: Any) -> None:
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -532,7 +552,7 @@ class ARMAMeanModel(MeanModel):
 
         self.sample_mean = sample_mean
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {
             "a": self.a.value,
             "b": self.b.value,
@@ -542,7 +562,7 @@ class ARMAMeanModel(MeanModel):
             "sample_mean": self.sample_mean,
         }
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self):
@@ -562,7 +582,7 @@ class ARMAMeanModel(MeanModel):
         observations: torch.Tensor,
         sample=False,
         initial_mean: Union[torch.Tensor, Any, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -615,23 +635,23 @@ class ARMAMeanModel(MeanModel):
 
 class UnivariateScalingModel(Protocol):
     @abstractmethod
-    def initialize_parameters(self, observations: torch.Tensor):
+    def initialize_parameters(self, observations: torch.Tensor) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def set_parameters(self):
+    def set_parameters(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         """
         Arguments: None
         Returns a list of parameters that can be used in a
@@ -645,7 +665,7 @@ class UnivariateScalingModel(Protocol):
         centered_observations: torch.Tensor,
         sample=False,
         scale_initial_value=None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -664,7 +684,7 @@ class UnivariateScalingModel(Protocol):
         """
         raise notImplementedError
 
-    def fit(self, observations: torch.Tensor):
+    def fit(self, observations: torch.Tensor) -> None:
         self.distribution.log_parameters()
 
         self.mean_model.initialize_parameters(observations)
@@ -709,7 +729,7 @@ class UnivariateScalingModel(Protocol):
         observations: torch.Tensor,
         scale_initial_value: Union[torch.Tensor, None] = None,
         mean_initial_value: Union[torch.Tensor, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
@@ -720,7 +740,7 @@ class UnivariateScalingModel(Protocol):
 
         return scale, mu, scale_next, mu_next
 
-    def __mean_log_likelihood(self, observations: torch.Tensor):
+    def __mean_log_likelihood(self, observations: torch.Tensor) -> torch.Tensor:
         """
         Compute and return the mean (per-sample) log likelihood (the total log likelihood divided by the number of samples).
         """
@@ -732,7 +752,7 @@ class UnivariateScalingModel(Protocol):
         )
         return mean_ll
 
-    def mean_log_likelihood(self, observations: torch.Tensor):
+    def mean_log_likelihood(self, observations: torch.Tensor) -> torch.Tensor:
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
@@ -747,7 +767,7 @@ class UnivariateScalingModel(Protocol):
         n: Union[torch.Tensor, int],
         mean_initial_value: Union[torch.Tensor, None] = None,
         scale_initial_value: Union[torch.Tensor, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate a random sampled output from the model.
         Arguments:
@@ -787,19 +807,19 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         self.device = device
         self.mean_model = mean_model
 
-    def initialize_parameters(self, observations: torch.Tensor):
+    def initialize_parameters(self, observations: torch.Tensor) -> None:
         pass
 
-    def set_parameters(self):
+    def set_parameters(self) -> None:
         pass
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {}
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return []
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         pass
 
     def _predict(
@@ -808,7 +828,7 @@ class UnivariateUnitScalingModel(UnivariateScalingModel):
         sample=False,
         scale_initial_value=None,
         mean_initial_value=None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -850,7 +870,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.device = device
         self.mean_model = mean_model
 
-    def initialize_parameters(self, observations: torch.Tensor):
+    def initialize_parameters(self, observations: torch.Tensor) -> None:
         self.n = observations.shape[1]
         self.a = DiagonalParameter(self.n, 1.0 - INITIAL_DECAY, device=self.device)
         self.b = DiagonalParameter(self.n, INITIAL_DECAY, device=self.device)
@@ -858,7 +878,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         self.d = DiagonalParameter(self.n, 1.0, device=self.device)
         self.sample_scale = torch.std(observations, dim=0)
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_std: Any):
+    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, initial_std: Any) -> None:
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -899,7 +919,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
 
         self.sample_scale = initial_std
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {
             "a": self.a.value,
             "b": self.b.value,
@@ -909,10 +929,10 @@ class UnivariateARCHModel(UnivariateScalingModel):
             "sample_scale": self.sample_scale,
         }
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         if self.a and self.b and self.c and self.d:
             logging.info(
                 "Univariate variance model\n"
@@ -930,7 +950,7 @@ class UnivariateARCHModel(UnivariateScalingModel):
         centered_observations: torch.Tensor,
         sample=False,
         scale_initial_value=None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and centered_observations, generate the *estimated*
         standard deviations (marginal) for each observation
 
@@ -1021,7 +1041,7 @@ class MultivariateARCHModel:
         else:
             self.parameter_factory = FullParameter
 
-    def initialize_parameters(self, n: int):
+    def initialize_parameters(self, n: int) -> None:
         self.n = n
         # Initialize a and b as simple multiples of the identity
         self.a = self.parameter_factory(n, 1.0 - INITIAL_DECAY, device=self.device)
@@ -1030,7 +1050,7 @@ class MultivariateARCHModel:
         self.d = self.parameter_factory(n, 1.0, device=self.device)
         self.log_parameters()
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_scale: Any):
+    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_scale: Any) -> None:
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -1069,7 +1089,7 @@ class MultivariateARCHModel:
 
         self.sample_scale = sample_scale
 
-    def get_parameters(self):
+    def get_parameters(self) -> Dict[str, Any]:
         return {
             "a": self.a,
             "b": self.b,
@@ -1079,10 +1099,10 @@ class MultivariateARCHModel:
             "sample_scale": self.sample_scale,
         }
 
-    def get_optimizable_parameters(self):
+    def get_optimizable_parameters(self) -> List[torch.Tensor]:
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
-    def log_parameters(self):
+    def log_parameters(self) -> None:
         if self.a and self.b and self.c and self.d:
             logging.info(
                 "Multivariate ARCH model\n"
@@ -1099,7 +1119,7 @@ class MultivariateARCHModel:
         observations: torch.Tensor,
         sample=False,
         scale_initial_value=None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
         lower triangular square roots of the sequence of covariance matrix estimates.
 
@@ -1178,7 +1198,7 @@ class MultivariateARCHModel:
         self,
         centered_observations: torch.Tensor,
         uv_scale: torch.Tensor,
-    ):
+    ) -> torch.Tensor:
         """
         This computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
         """
@@ -1206,7 +1226,7 @@ class MultivariateARCHModel:
 
         return mean_ll
 
-    def mean_log_likelihood(self, observations: torch.Tensor):
+    def mean_log_likelihood(self, observations: torch.Tensor) -> torch.Tensor:
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
@@ -1225,7 +1245,7 @@ class MultivariateARCHModel:
 
         return float(result)
 
-    def fit(self, observations: torch.Tensor):
+    def fit(self, observations: torch.Tensor) -> None:
         self.univariate_model.fit(observations)
         uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
 
@@ -1253,7 +1273,7 @@ class MultivariateARCHModel:
             line_search_fn="strong_wolfe",
         )
 
-        def loss_closure():
+        def loss_closure() -> torch.Tensor:
             if DEBUG:
                 print(f"a: {self.a.value}")
                 print(f"b: {self.b.value}")
@@ -1282,7 +1302,14 @@ class MultivariateARCHModel:
     def predict(
         self,
         observations: torch.Tensor,
-    ):
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         """
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
@@ -1306,7 +1333,7 @@ class MultivariateARCHModel:
         n: Union[torch.Tensor, int],
         initial_mv_scale: Union[torch.Tensor, None],
         initial_uv_scale: Union[torch.Tensor, None] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate a random sampled output from the model.
         Arguments:
@@ -1371,6 +1398,6 @@ if __name__ == "__main__":
     )
 
     mv_x, mv_scale, uv_scale, mu = multivariate_model.sample(
-        50000, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]
+        10000, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]
     )
     multivariate_model.fit(mv_x)
