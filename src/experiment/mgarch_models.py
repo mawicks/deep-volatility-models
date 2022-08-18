@@ -238,7 +238,7 @@ def random_lower_triangular(
 def marginal_conditional_log_likelihood(
     observations: torch.Tensor,
     scale: torch.Tensor,
-    distribution: Distribution,
+    distribution: torch.distributions.Distribution,
 ):
     """
     Arguments:
@@ -255,7 +255,7 @@ def marginal_conditional_log_likelihood(
     logging.debug(f"scaled_observations: \n{scaled_observations}")
 
     # Compute the log likelihoods on the innovations
-    ll = distribution.get_instance().log_prob(scaled_observations) - torch.log(scale)
+    ll = distribution.log_prob(scaled_observations) - torch.log(scale)
 
     # For consistency with the multivariate case, we *sum* over the
     # variables (columns) first and *average* over the rows (observations).
@@ -268,7 +268,7 @@ def marginal_conditional_log_likelihood(
 def joint_conditional_log_likelihood(
     observations: torch.Tensor,
     mv_scale: torch.Tensor,
-    distribution: Distribution,
+    distribution: torch.distributions.Distribution,
     uv_scale=Union[torch.Tensor, None],
 ):
     """
@@ -319,7 +319,7 @@ def joint_conditional_log_likelihood(
     logging.debug(f"e: \n{e}")
 
     # Compute the log likelihoods on the innovations
-    log_pdf = distribution.get_instance().log_prob(e)
+    log_pdf = distribution.log_prob(e)
 
     ll = torch.sum(log_pdf - log_det, dim=1)
 
@@ -728,7 +728,7 @@ class UnivariateScalingModel(Protocol):
         centered_observations = observations - mu
         scale = self._predict(centered_observations)[0]
         mean_ll = marginal_conditional_log_likelihood(
-            centered_observations, scale, self.distribution
+            centered_observations, scale, self.distribution.get_instance()
         )
         return mean_ll
 
@@ -1201,7 +1201,7 @@ class MultivariateARCHModel:
             centered_observations,
             mv_scale=mv_scale,
             uv_scale=uv_scale,
-            distribution=self.distribution,
+            distribution=self.distribution.get_instance(),
         )
 
         return mean_ll
