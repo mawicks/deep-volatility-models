@@ -10,21 +10,17 @@ import pandas as pd
 
 import torch
 
+
 from deep_volatility_models import data_sources
 from deep_volatility_models import stock_data
 from deep_volatility_models import time_series_datasets
 
-# Local imports
-from mgarch_models import (
-    NormalDistribution,
-    StudentTDistribution,
-    ZeroMeanModel,
-    ARMAMeanModel,
-    UnivariateUnitScalingModel,
-    UnivariateARCHModel,
-    MultivariateARCHModel,
-    ParameterConstraint,
-)
+# Local modules
+from .distributions import NormalDistribution, StudentTDistribution
+from .mean_models import ZeroMeanModel, ARMAMeanModel
+from .univariate_models import UnivariateUnitScalingModel, UnivariateARCHModel
+from .multivariate_models import MultivariateARCHModel
+from .parameters import ParameterConstraint
 
 DEFAULT_SEED = 42
 
