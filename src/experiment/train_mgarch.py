@@ -1,7 +1,6 @@
 # Standard Python
 import datetime as dt
 import logging
-
 from typing import Callable, Dict, Iterable, Iterator, Union, Tuple
 
 # Common packages

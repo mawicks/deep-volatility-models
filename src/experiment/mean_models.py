@@ -1,7 +1,6 @@
 # Standard Python
 from abc import abstractmethod
 import logging
-
 from typing import Any, Dict, List, Protocol, Tuple, Union
 
 # Common packages

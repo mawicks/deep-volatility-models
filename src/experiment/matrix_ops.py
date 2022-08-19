@@ -1,5 +1,4 @@
 # Standard Python
-import os
 from typing import Union
 
 # Common packages
