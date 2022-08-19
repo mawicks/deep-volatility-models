@@ -7,7 +7,7 @@ import torch
 
 
 def optimize(
-    optim: torch.optim.Optimizer, closure: Callable[[], torch.Tensor], label: str = ""
+    optim: torch.optim.Optimizer, closure: Callable[[], float], label: str = ""
 ) -> None:
     """
     This is a wrapper around optim.step() that higher level monitoring.

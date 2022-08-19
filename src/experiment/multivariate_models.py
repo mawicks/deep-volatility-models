@@ -1,6 +1,6 @@
 # Standard Python
 import logging
-from typing import Any, Dict, List, Protocol, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Type, Union
 
 # Common packages
 import torch
@@ -10,9 +10,11 @@ from . import constants
 from .distributions import Distribution, NormalDistribution, StudentTDistribution
 from .parameters import (
     ParameterConstraint,
-    ScalarParameter,
-    DiagonalParameter,
-    TriangularParameter,
+    Parameter,
+    scalar_factory,
+    diagonal_factory,
+    triangular_factory,
+    full_factory,
     FullParameter,
 )
 from .univariate_models import (
@@ -86,6 +88,13 @@ def joint_conditional_log_likelihood(
 
 
 class MultivariateARCHModel:
+    n: Optional[int]
+    parameter_factory: Callable[..., Parameter]
+    a: Optional[Parameter]
+    b: Optional[Parameter]
+    c: Optional[Parameter]
+    d: Optional[Parameter]
+
     def __init__(
         self,
         constraint=ParameterConstraint.FULL,
@@ -104,24 +113,24 @@ class MultivariateARCHModel:
 
         self.n = self.a = self.b = self.c = self.d = None
 
+        # The use of setattr here is to keep mypy happy.  It doeesn't like assigning
+        # to attributes hinted as Callable.  It interprets them to be bound methods.
         if constraint == ParameterConstraint.SCALAR:
-            self.parameter_factory = ScalarParameter
+            setattr(self, "parameter_factory", scalar_factory)
         elif constraint == ParameterConstraint.DIAGONAL:
-            self.parameter_factory = DiagonalParameter
+            setattr(self, "parameter_factory", diagonal_factory)
         elif constraint == ParameterConstraint.TRIANGULAR:
-            self.parameter_factory = TriangularParameter
+            setattr(self, "parameter_factory", triangular_factory)
         else:
-            self.parameter_factory = FullParameter
+            setattr(self, "parameter_factory", full_factory)
 
     def initialize_parameters(self, n: int) -> None:
         self.n = n
         # Initialize a and b as simple multiples of the identity
-        self.a = self.parameter_factory(
-            n, 1.0 - constants.INITIAL_DECAY, device=self.device
-        )
-        self.b = self.parameter_factory(n, constants.INITIAL_DECAY, device=self.device)
-        self.c = self.parameter_factory(n, 0.01, device=self.device)
-        self.d = self.parameter_factory(n, 1.0, device=self.device)
+        self.a = self.parameter_factory(n, 1.0 - constants.INITIAL_DECAY, self.device)
+        self.b = self.parameter_factory(n, constants.INITIAL_DECAY, self.device)
+        self.c = self.parameter_factory(n, 0.01, self.device)
+        self.d = self.parameter_factory(n, 1.0, self.device)
         self.log_parameters()
 
     def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_scale: Any) -> None:
@@ -151,15 +160,16 @@ class MultivariateARCHModel:
             )
 
         self.n = a.shape[0]
-        self.a = FullParameter(self.n)
-        self.b = FullParameter(self.n)
-        self.c = FullParameter(self.n)
-        self.d = FullParameter(self.n)
+        if self.n is not None:
+            self.a = FullParameter(self.n)
+            self.b = FullParameter(self.n)
+            self.c = FullParameter(self.n)
+            self.d = FullParameter(self.n)
 
-        self.a.set(a)
-        self.b.set(b)
-        self.c.set(c)
-        self.d.set(d)
+            self.a.set(a)
+            self.b.set(b)
+            self.c.set(c)
+            self.d.set(d)
 
         self.sample_scale = sample_scale
 
@@ -174,6 +184,8 @@ class MultivariateARCHModel:
         }
 
     def get_optimizable_parameters(self) -> List[torch.Tensor]:
+        if self.a is None or self.b is None or self.c is None or self.d is None:
+            raise ValueError("MultivariateARCHModel has not been initialized")
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self) -> None:
@@ -223,7 +235,7 @@ class MultivariateARCHModel:
 
         if constants.DEBUG:
             print(f"Initial scale: {scale_t}")
-            print(f"self.d: {self.d.value}")
+            print(f"self.d: {self.d.value if self.d is not None else None}")
             print(f"self.sample_scale: {self.sample_scale}")
         scale_sequence = []
 
@@ -302,7 +314,8 @@ class MultivariateARCHModel:
 
         return mean_ll
 
-    def mean_log_likelihood(self, observations: torch.Tensor) -> torch.Tensor:
+    @torch.no_grad()
+    def mean_log_likelihood(self, observations: torch.Tensor) -> float:
         """
         This is the inference version of mean_log_likelihood(), which is the version clients would normally use.
         It computes the mean per-sample log likelihood (the total log likelihood divided by the number of samples).
@@ -314,10 +327,9 @@ class MultivariateARCHModel:
             float - mean (per sample) log likelihood
 
         """
-        with torch.no_grad():
-            uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
-            centered_observations = observations - uv_mean
-            result = self.__mean_log_likelihood(centered_observations, uv_scale)
+        uv_scale, uv_mean = self.univariate_model.predict(observations)[:2]
+        centered_observations = observations - uv_mean
+        result = self.__mean_log_likelihood(centered_observations, uv_scale)
 
         return float(result)
 
@@ -349,12 +361,13 @@ class MultivariateARCHModel:
             line_search_fn="strong_wolfe",
         )
 
-        def loss_closure() -> torch.Tensor:
+        def loss_closure() -> float:
+            safe_value = lambda x: x.value if x is not None else None
             if constants.DEBUG:
-                print(f"a: {self.a.value}")
-                print(f"b: {self.b.value}")
-                print(f"c: {self.c.value}")
-                print(f"d: {self.d.value}")
+                print(f"a: {safe_value(self.a)}")
+                print(f"b: {safe_value(self.b)}")
+                print(f"c: {safe_value(self.c)}")
+                print(f"d: {safe_value(self.d)}")
                 print()
             optim.zero_grad()
 
@@ -362,7 +375,7 @@ class MultivariateARCHModel:
             loss = -self.__mean_log_likelihood(centered_observations, uv_scale=uv_scale)
             loss.backward()
 
-            return loss
+            return float(loss)
 
         optimize(optim, loss_closure, "multivariate model")
 
@@ -370,11 +383,13 @@ class MultivariateARCHModel:
         self.log_parameters()
 
         logging.debug("Gradients: ")
-        logging.debug(f"a.grad:\n{self.a.value.grad}")
-        logging.debug(f"b.grad:\n{self.b.value.grad}")
-        logging.debug(f"c.grad:\n{self.c.value.grad}")
-        logging.debug(f"d.grad:\n{self.d.value.grad}")
+        safe_grad = lambda x: x.value.grad if x is not None else None
+        logging.debug(f"a.grad:\n{safe_grad(self.a)}")
+        logging.debug(f"b.grad:\n{safe_grad(self.b)}")
+        logging.debug(f"c.grad:\n{safe_grad(self.c)}")
+        logging.debug(f"d.grad:\n{safe_grad(self.d)}")
 
+    @torch.no_grad()
     def predict(
         self,
         observations: torch.Tensor,
@@ -390,25 +405,25 @@ class MultivariateARCHModel:
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
-        with torch.no_grad():
-            (
-                uv_scale,
-                uv_mean,
-                uv_scale_next,
-                uv_mean_next,
-            ) = self.univariate_model.predict(observations)
-            centered_observations = observations - uv_mean
-            scaled_centered_observations = centered_observations / uv_scale
+        (
+            uv_scale,
+            uv_mean,
+            uv_scale_next,
+            uv_mean_next,
+        ) = self.univariate_model.predict(observations)
+        centered_observations = observations - uv_mean
+        scaled_centered_observations = centered_observations / uv_scale
 
-            mv_scale, mv_scale_next = self._predict(scaled_centered_observations)
+        mv_scale, mv_scale_next = self._predict(scaled_centered_observations)
 
         return mv_scale, uv_scale, uv_mean, mv_scale_next, uv_scale_next, uv_mean_next
 
+    @torch.no_grad()
     def sample(
         self,
         n: Union[torch.Tensor, int],
-        initial_mv_scale: Union[torch.Tensor, None],
-        initial_uv_scale: Union[torch.Tensor, None] = None,
+        initial_mv_scale: Any,
+        initial_uv_scale: Any = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Generate a random sampled output from the model.
@@ -424,20 +439,23 @@ class MultivariateARCHModel:
             output: torch.Tensor - Sample model output
             h: torch.Tensor - Sqrt of covariance used to scale the sample
         """
-
-        with torch.no_grad():
-            if isinstance(n, int):
-                n = torch.randn(n, self.n)
-
-            mv_scale = self._predict(
-                n, sample=True, scale_initial_value=initial_mv_scale
-            )[0]
-
-            mv_scaled_noise = (mv_scale @ n.unsqueeze(2)).squeeze(2)
-
-            output, uv_scale, uv_mean = self.univariate_model.sample(
-                mv_scaled_noise, initial_uv_scale
+        if self.n is None:
+            raise ValueError(
+                "MultivariateARCHModel has not been trained or initialized"
             )
+
+        if isinstance(n, int):
+            n = torch.randn(n, self.n)
+
+        mv_scale = self._predict(n, sample=True, scale_initial_value=initial_mv_scale)[
+            0
+        ]
+
+        mv_scaled_noise = (mv_scale @ n.unsqueeze(2)).squeeze(2)
+
+        output, uv_scale, uv_mean = self.univariate_model.sample(
+            mv_scaled_noise, initial_uv_scale
+        )
 
         return output, mv_scale, uv_scale, uv_mean
 
@@ -462,6 +480,7 @@ if __name__ == "__main__":
             [0.008, 0.009, 0.005],
         ],
     )
+    multivariate_model.univariate_model.set_parameters(n=3)
 
     mv_x, mv_scale, uv_scale, mu = multivariate_model.sample(
         10000, [[0.008, 0.0, 0.0], [0.008, 0.01, 0.0], [0.008, 0.009, 0.005]]

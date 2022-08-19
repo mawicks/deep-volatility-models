@@ -1,7 +1,7 @@
 # Standard Python
 from abc import abstractmethod
 import logging
-from typing import Any, Protocol, Union
+from typing import Any, Optional, Protocol, Union
 from enum import Enum
 
 # Common packages
@@ -16,6 +16,8 @@ class ParameterConstraint(Enum):
 
 
 class Parameter(Protocol):
+    value: torch.Tensor
+
     @abstractmethod
     def set(self, value: Any) -> None:
         raise NotImplementedError
@@ -27,7 +29,7 @@ class Parameter(Protocol):
 
 class ScalarParameter(Parameter):
     def __init__(
-        self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
+        self, n: int, scale: float = 1.0, device: Optional[torch.device] = None
     ):
         self.device = device
         self.value = scale * torch.tensor(1.0, device=device)
@@ -52,7 +54,7 @@ class ScalarParameter(Parameter):
 
 class DiagonalParameter(Parameter):
     def __init__(
-        self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
+        self, n: int, scale: float = 1.0, device: Optional[torch.device] = None
     ):
         self.device = device
         self.value = scale * torch.ones(n, device=device)
@@ -81,7 +83,7 @@ class DiagonalParameter(Parameter):
 
 class TriangularParameter(Parameter):
     def __init__(
-        self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
+        self, n: int, scale: float = 1.0, device: Optional[torch.device] = None
     ):
         self.device = device
         self.value = scale * torch.eye(n, device=device)
@@ -110,7 +112,7 @@ class TriangularParameter(Parameter):
 
 class FullParameter:
     def __init__(
-        self, n: int, scale: float = 1.0, device: Union[torch.device, None] = None
+        self, n: int, scale: float = 1.0, device: Optional[torch.device] = None
     ):
         self.device = device
         self.value = scale * torch.eye(n, device=device)
@@ -131,6 +133,28 @@ class FullParameter:
             print(f"self.value: {self.value}")
             print(f"other: {other}")
             raise e
+
+
+def scalar_factory(
+    n: int, scale: float, device: Optional[torch.device]
+) -> ScalarParameter:
+    return ScalarParameter(n, scale, device)
+
+
+def diagonal_factory(
+    n: int, scale: float, device: Optional[torch.device]
+) -> DiagonalParameter:
+    return DiagonalParameter(n, scale, device)
+
+
+def triangular_factory(
+    n: int, scale: float, device: Optional[torch.device]
+) -> TriangularParameter:
+    return TriangularParameter(n, scale, device)
+
+
+def full_factory(n: int, scale: float, device: Optional[torch.device]) -> FullParameter:
+    return FullParameter(n, scale, device)
 
 
 if __name__ == "__main__":

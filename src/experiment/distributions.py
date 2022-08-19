@@ -9,12 +9,18 @@ import torch
 
 
 class Distribution(Protocol):
+    device: torch.device
+
     @abstractmethod
-    def set_parameters(self) -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
         raise NotImplementedError
 
     @abstractmethod
     def get_parameters(self) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def log_parameters(self) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -37,7 +43,7 @@ class NormalDistribution(Distribution):
             scale=torch.tensor(1.0, dtype=torch.float, device=device),
         )
 
-    def set_parameters(self, dof: Union[float, torch.Tensor]) -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
         pass
 
     def get_parameters(self) -> Dict[str, Any]:
@@ -60,7 +66,9 @@ class StudentTDistribution(Distribution):
             6.0, dtype=torch.float, device=device, requires_grad=True
         )
 
-    def set_parameters(self, dof: Union[float, torch.Tensor]) -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
+        dof = kwargs["dof"]
+
         if not isinstance(dof, torch.Tensor):
             dof = torch.tensor(dof, dtype=torch.float, device=self.device)
         dof.requires_grad = True

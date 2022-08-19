@@ -5,7 +5,7 @@ from typing import Callable, Dict, Iterable, Iterator, Union, Tuple
 
 # Common packages
 import click
-import pandas as pd
+import pandas as pd  # type: ignore
 
 import torch
 
@@ -56,7 +56,7 @@ def prepare_data(
 
     symbol_list = sorted(symbol_list)
     full_history = combiner(history_loader(symbol_list))
-    training_data = full_history.loc[start_date:end_date, (symbol_list, "log_return")]
+    training_data = full_history.loc[start_date:end_date, (symbol_list, "log_return")]  # type: ignore
     print(training_data.columns)
 
     return training_data

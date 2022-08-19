@@ -8,6 +8,13 @@ import torch
 
 # Local modules
 from . import constants
+from .parameters import (
+    Parameter,
+    ScalarParameter,
+    DiagonalParameter,
+    TriangularParameter,
+    FullParameter,
+)
 
 
 class MeanModel(Protocol):
@@ -16,7 +23,7 @@ class MeanModel(Protocol):
         raise NotImplementedError
 
     @abstractmethod
-    def set_parameters() -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -35,6 +42,7 @@ class MeanModel(Protocol):
     def _predict(
         self,
         observations: torch.Tensor,
+        sample: bool = False,
         mean_initial_value: Union[torch.Tensor, Any, None] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Given a, b, c, d, and observations, generate the *estimated*
@@ -55,6 +63,7 @@ class MeanModel(Protocol):
         """
         raise NotImplementedError
 
+    @torch.no_grad()
     def predict(
         self, observations: torch.Tensor, initial_mean=None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -62,22 +71,17 @@ class MeanModel(Protocol):
         This is the inference version of predict(), which is the version clients would normally use.
         It doesn't compute any gradient information, so it should be faster.
         """
-        with torch.no_grad():
-            mu, mu_next = self._predict(observations, initial_mean)
+        return self._predict(observations, initial_mean)
 
-        return mu, mu_next
-
+    @torch.no_grad()
     def sample(
         self,
         scaled_zero_mean_noise: torch.Tensor,
         initial_mean: Union[torch.Tensor, None],
     ) -> torch.Tensor:
+        # mu = self.__predict(scaled_zero_mean_noise, sample=True, initial_mean=initial_mean)
+        # return mu
         raise Exception("sample() called.")
-        with torch.no_grad():
-            mu = self.__predict(
-                scaled_zero_mean_noise, sample=True, initial_mean=initial_mu
-            )
-        return mu
 
 
 class ZeroMeanModel(MeanModel):
@@ -90,7 +94,7 @@ class ZeroMeanModel(MeanModel):
     def initialize_parameters(self, observations: torch.Tensor) -> None:
         self.n = observations.shape[1]
 
-    def set_parameters(self) -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
         pass
 
     def get_parameters(self) -> Dict[str, Any]:
@@ -132,6 +136,14 @@ class ZeroMeanModel(MeanModel):
 
 
 class ARMAMeanModel(MeanModel):
+    n: Union[int, None]
+    a: Union[Parameter, None]
+    b: Union[Parameter, None]
+    c: Union[Parameter, None]
+    d: Union[Parameter, None]
+    sample_mean: Union[torch.Tensor, None]
+    device: Union[torch.device, None]
+
     def __init__(
         self,
         device: Union[torch.device, None] = None,
@@ -150,7 +162,13 @@ class ARMAMeanModel(MeanModel):
         self.d = DiagonalParameter(self.n, 1.0, device=self.device)
         self.sample_mean = torch.mean(observations, dim=0)
 
-    def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_mean: Any) -> None:
+    def set_parameters(self, **kwargs: Any) -> None:
+        a = kwargs["a"]
+        b = kwargs["b"]
+        c = kwargs["c"]
+        d = kwargs["d"]
+        sample_mean = kwargs["sample_mean"]
+
         if not isinstance(a, torch.Tensor):
             a = torch.tensor(a, dtype=torch.float, device=self.device)
         if not isinstance(b, torch.Tensor):
@@ -159,7 +177,7 @@ class ARMAMeanModel(MeanModel):
             c = torch.tensor(c, dtype=torch.float, device=self.device)
         if not isinstance(d, torch.Tensor):
             d = torch.tensor(d, dtype=torch.float, device=self.device)
-        if not isinstance(initial_mean, torch.Tensor):
+        if not isinstance(sample_mean, torch.Tensor):
             sample_mean = torch.tensor(
                 sample_mean, dtype=torch.float, device=self.device
             )
@@ -169,39 +187,43 @@ class ARMAMeanModel(MeanModel):
             or a.shape != b.shape
             or a.shape != c.shape
             or a.shape != d.shape
-            or a.shape != initial_mean.shape
+            or a.shape != sample_mean.shape
         ):
             raise ValueError(
                 f"The shapes of a({a.shape}), b({b.shape}), "
                 f"c({c.shape}), d({d.shape}), and "
-                f"initial_mean({initial_mean.shape}) must have "
+                f"sample mean({sample_mean.shape}) must have "
                 "only and only one dimension that's consistent"
             )
 
         self.n = a.shape[0]
-        self.a = DiagonalParameter(self.n)
-        self.b = DiagonalParameter(self.n)
-        self.c = DiagonalParameter(self.n)
-        self.d = DiagonalParameter(self.n)
+        if isinstance(self.n, int):
+            self.a = DiagonalParameter(self.n)
+            self.b = DiagonalParameter(self.n)
+            self.c = DiagonalParameter(self.n)
+            self.d = DiagonalParameter(self.n)
 
-        self.a.set(a)
-        self.b.set(b)
-        self.c.set(c)
-        self.d.set(d)
+            self.a.set(a)
+            self.b.set(b)
+            self.c.set(c)
+            self.d.set(d)
 
         self.sample_mean = sample_mean
 
     def get_parameters(self) -> Dict[str, Any]:
+        safe_value = lambda x: x.value if x is not None else None
         return {
-            "a": self.a.value,
-            "b": self.b.value,
-            "c": self.c.value,
-            "d": self.d.value,
+            "a": safe_value(self.a),
+            "b": safe_value(self.b),
+            "c": safe_value(self.c),
+            "d": safe_value(self.d),
             "n": self.n,
             "sample_mean": self.sample_mean,
         }
 
     def get_optimizable_parameters(self) -> List[torch.Tensor]:
+        if self.a is None or self.b is None or self.c is None or self.d is None:
+            raise ValueError("ARMAMeanModel parameters have not been initialized")
         return [self.a.value, self.b.value, self.c.value, self.d.value]
 
     def log_parameters(self):
@@ -258,7 +280,9 @@ class ARMAMeanModel(MeanModel):
 
             # While searching over the parameter space, an unstable value for `a` may be tested.
             # Clamp to prevent it from overflowing.
-            a_mu = torch.clamp(self.a @ mu_t, min=MIN_CLAMP, max=MAX_CLAMP)
+            a_mu = torch.clamp(
+                self.a @ mu_t, min=constants.MIN_CLAMP, max=constants.MAX_CLAMP
+            )
 
             if sample:
                 obs = obs + mu_t
