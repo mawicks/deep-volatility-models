@@ -11,12 +11,12 @@ from .distributions import Distribution, NormalDistribution, StudentTDistributio
 from .parameters import (
     ParameterConstraint,
     Parameter,
-    scalar_factory,
-    diagonal_factory,
-    triangular_factory,
-    full_factory,
+    ScalarParameter,
+    DiagonalParameter,
+    TriangularParameter,
     FullParameter,
 )
+
 from .univariate_models import (
     UnivariateScalingModel,
     UnivariateUnitScalingModel,
@@ -89,7 +89,7 @@ def joint_conditional_log_likelihood(
 
 class MultivariateARCHModel:
     n: Optional[int]
-    parameter_factory: Callable[..., Parameter]
+    parameter_type: Type[Parameter]
     a: Optional[Parameter]
     b: Optional[Parameter]
     c: Optional[Parameter]
@@ -116,21 +116,21 @@ class MultivariateARCHModel:
         # The use of setattr here is to keep mypy happy.  It doeesn't like assigning
         # to attributes hinted as Callable.  It interprets them to be bound methods.
         if constraint == ParameterConstraint.SCALAR:
-            setattr(self, "parameter_factory", scalar_factory)
+            self.parameter_type = ScalarParameter
         elif constraint == ParameterConstraint.DIAGONAL:
-            setattr(self, "parameter_factory", diagonal_factory)
+            self.parameter_type = DiagonalParameter
         elif constraint == ParameterConstraint.TRIANGULAR:
-            setattr(self, "parameter_factory", triangular_factory)
+            self.parameter_type = TriangularParameter
         else:
-            setattr(self, "parameter_factory", full_factory)
+            self.parameter_type = FullParameter
 
     def initialize_parameters(self, n: int) -> None:
         self.n = n
         # Initialize a and b as simple multiples of the identity
-        self.a = self.parameter_factory(n, 1.0 - constants.INITIAL_DECAY, self.device)
-        self.b = self.parameter_factory(n, constants.INITIAL_DECAY, self.device)
-        self.c = self.parameter_factory(n, 0.01, self.device)
-        self.d = self.parameter_factory(n, 1.0, self.device)
+        self.a = self.parameter_type(n, 1.0 - constants.INITIAL_DECAY, self.device)
+        self.b = self.parameter_type(n, constants.INITIAL_DECAY, self.device)
+        self.c = self.parameter_type(n, 0.01, self.device)
+        self.d = self.parameter_type(n, 1.0, self.device)
         self.log_parameters()
 
     def set_parameters(self, a: Any, b: Any, c: Any, d: Any, sample_scale: Any) -> None:

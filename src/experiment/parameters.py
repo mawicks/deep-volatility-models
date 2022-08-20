@@ -19,6 +19,10 @@ class Parameter(Protocol):
     value: torch.Tensor
 
     @abstractmethod
+    def __init__(self, n: int, scale: float, device: Optional[torch.device]):
+        raise NotImplementedError
+
+    @abstractmethod
     def set(self, value: Any) -> None:
         raise NotImplementedError
 
@@ -133,28 +137,6 @@ class FullParameter:
             print(f"self.value: {self.value}")
             print(f"other: {other}")
             raise e
-
-
-def scalar_factory(
-    n: int, scale: float, device: Optional[torch.device]
-) -> ScalarParameter:
-    return ScalarParameter(n, scale, device)
-
-
-def diagonal_factory(
-    n: int, scale: float, device: Optional[torch.device]
-) -> DiagonalParameter:
-    return DiagonalParameter(n, scale, device)
-
-
-def triangular_factory(
-    n: int, scale: float, device: Optional[torch.device]
-) -> TriangularParameter:
-    return TriangularParameter(n, scale, device)
-
-
-def full_factory(n: int, scale: float, device: Optional[torch.device]) -> FullParameter:
-    return FullParameter(n, scale, device)
 
 
 if __name__ == "__main__":
